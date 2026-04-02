@@ -67,12 +67,12 @@ Microphone/System Audio
 
 ---
 
-### ADR-003: Gemini responseModalities must be TEXT not AUDIO
-**Decision:** `responseModalities: [Modality.TEXT]` — NOT `[Modality.AUDIO]`.
+### ADR-003: Trigger Groq from silence detection, not turnComplete
+**Decision:** `scheduleGroqTrigger()` is called on every `inputTranscription` chunk. It sets a 700ms debounce timer. When 700ms of silence passes after the last chunk (user stopped speaking), Groq is triggered immediately — before Gemini starts generating audio. `turnComplete` is kept only as a fallback.
 
-**Why:** When set to AUDIO, Gemini synthesizes a full audio response before `turnComplete` fires, adding 10-15s of latency. We never play the Gemini response anyway — Groq provides the text answer. TEXT mode makes `turnComplete` fire as soon as transcription is ready.
+**Why:** `responseModalities: [Modality.TEXT]` was attempted but breaks the session — the `gemini-2.5-flash-native-audio-preview` model with speaker diarization requires AUDIO modality. The real root cause was waiting for `turnComplete`, which fires only after Gemini finishes generating a full audio response (10-15s). By triggering on speech silence instead, Groq starts ~700ms after the user stops talking.
 
-**Status:** ✅ Fixed 2026-04-02. Changed to `[Modality.TEXT]` in `gemini.js`.
+**Status:** ✅ Fixed 2026-04-02. `scheduleGroqTrigger()` in `gemini.js`.
 
 ---
 
