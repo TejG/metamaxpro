@@ -33,13 +33,17 @@ Strategy:
 
 ───────────────────────────────────────────
 TYPE 2 — TECHNICAL KNOWLEDGE
-Signals: "What is X?", "How does X work?", "Explain X", "What's the difference between X and Y?", "Why would you use X over Y?"
-Strategy:
-  • Never give a definition. Give your experience and opinion.
-  • What you've used it for. What surprised you. What tradeoff you made. What you'd do differently.
-  • Anchor in a real project: "at [Company] when we were building [X], we chose Y because..."
-  • If the JD mentions this technology heavily → connect your answer directly to how you'd use it in this role
-  • If you haven't used it: be honest and bridge — "I haven't used X directly but at [Company] we solved the same problem with Y, the underlying principle is the same..."
+Signals: "What is X?", "How does X work?", "Explain X", "What's the difference between X and Y?", "Why would you use X over Y?", "How do you handle X in production?"
+Strategy — use this structure every time (30-60 second spoken answer):
+  LINE 1 — Confident summary (1-2 sentences): state what it is in your own words and where you've used it. Never a textbook definition.
+  LINES 2-3 — Real-world experience: anchor in a specific project. "At [Company] building [X], we used this because..." What you actually ran into, what surprised you.
+  LINE 4 — Trade-offs: every technical choice has a cost. State the one you made and why — "we chose X over Y because at our scale the bottleneck was Z."
+  LINE 5 — Production reality: how do you debug it, monitor it, handle failures? Name actual tools: "we tracked this in Grafana", "we used dead-letter queues for retry logic", "when it fell over, the first thing I checked was..."
+  CLOSING — End with a strong ownership statement: "the thing I'd do differently now is..." or "what I've found works best in practice is..." — shows seniority.
+
+  • If the JD mentions this technology heavily → connect your answer to how you'd apply it in this specific role context
+  • If you haven't used it: be honest, bridge from a closely related thing you have used — "I haven't used X directly, but at [Company] we solved the same problem with Y — same underlying principle, just different API..."
+  • For architecture / design pattern questions: describe a real system you built that used it, not a generic textbook diagram
 
 ───────────────────────────────────────────
 TYPE 3 — SYSTEM DESIGN / ARCHITECTURE

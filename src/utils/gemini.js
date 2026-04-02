@@ -50,11 +50,21 @@ let messageBuffer = '';
 // without waiting for Gemini to finish generating its audio response.
 let transcriptionSilenceTimer = null;
 const SILENCE_THRESHOLD_MS = 700; // ms of silence after last transcription chunk before triggering
+let sessionReadyAt = 0; // timestamp when session became active — guard against premature triggers
+const SESSION_WARMUP_MS = 2000; // ignore silence triggers for the first 2s of a session
 
-function scheduleGroqTrigger() {
+function cancelSilenceTimer() {
     if (transcriptionSilenceTimer) {
         clearTimeout(transcriptionSilenceTimer);
+        transcriptionSilenceTimer = null;
     }
+}
+
+function scheduleGroqTrigger() {
+    // Don't fire during session warmup — avoids SystemAudioDump startup noise triggering Groq
+    if (Date.now() - sessionReadyAt < SESSION_WARMUP_MS) return;
+
+    cancelSilenceTimer();
     transcriptionSilenceTimer = setTimeout(() => {
         transcriptionSilenceTimer = null;
         if (currentTranscription.trim() !== '') {
@@ -105,6 +115,8 @@ function initializeNewSession(profile = null, customPrompt = null) {
     conversationHistory = [];
     screenAnalysisHistory = [];
     groqConversationHistory = [];
+    cancelSilenceTimer();
+    sessionReadyAt = 0;
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
     console.log('New conversation session started:', currentSessionId, 'profile:', profile);
@@ -493,6 +505,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             callbacks: {
                 onopen: function () {
+                    sessionReadyAt = Date.now();
                     sendToRenderer('update-status', 'Live session connected');
                 },
                 onmessage: function (message) {
@@ -598,9 +611,11 @@ async function attemptReconnect() {
     reconnectAttempts++;
     console.log(`Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
 
-    // Clear stale buffers
+    // Clear stale buffers and any pending silence timer
     messageBuffer = '';
     currentTranscription = '';
+    cancelSilenceTimer();
+    sessionReadyAt = 0; // reset warmup guard until new session opens
     // Don't reset groqConversationHistory to preserve context across reconnects
 
     sendToRenderer('update-status', `Reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
