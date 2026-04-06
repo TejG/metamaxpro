@@ -492,6 +492,7 @@ export class MainView extends LitElement {
         _geminiKey: { state: true },
         _groqKey: { state: true },
         _openaiKey: { state: true },
+        _anthropicKey: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
         // Local AI state
@@ -515,6 +516,7 @@ export class MainView extends LitElement {
         this._geminiKey = '';
         this._groqKey = '';
         this._openaiKey = '';
+        this._anthropicKey = '';
         this._tokenError = false;
         this._keyError = false;
         this._showLocalHelp = false;
@@ -545,6 +547,7 @@ export class MainView extends LitElement {
             this._geminiKey = await metaMaxPro.storage.getApiKey().catch(() => '') || '';
             this._groqKey = await metaMaxPro.storage.getGroqApiKey().catch(() => '') || '';
             this._openaiKey = creds.openaiKey || '';
+            this._anthropicKey = await metaMaxPro.storage.getAnthropicApiKey().catch(() => '') || '';
 
             // Load local AI settings
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
@@ -728,6 +731,13 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
+    async _saveAnthropicKey(val) {
+        this._anthropicKey = val;
+        this._keyError = false;
+        await metaMaxPro.storage.setAnthropicApiKey(val);
+        this.requestUpdate();
+    }
+
     async _saveOllamaHost(val) {
         this._ollamaHost = val;
         await metaMaxPro.storage.updatePreference('ollamaHost', val);
@@ -770,6 +780,12 @@ export class MainView extends LitElement {
         } else if (this._mode === 'local') {
             // Local mode doesn't need API keys, just Ollama host
             if (!this._ollamaHost.trim()) {
+                return;
+            }
+        } else if (this._mode === 'anthropic') {
+            if (!this._anthropicKey.trim()) {
+                this._keyError = true;
+                this.requestUpdate();
                 return;
             }
         }
@@ -849,6 +865,10 @@ export class MainView extends LitElement {
                     <span class="mode-card-title">Use your API keys</span>
                     <span class="mode-card-desc">Bring your own Gemini / Groq keys</span>
                 </div>
+                <div class="mode-card" @click=${() => this._saveMode('anthropic')}>
+                    <span class="mode-card-title">Use Claude (Anthropic)</span>
+                    <span class="mode-card-desc">Anthropic API key + Groq for speech</span>
+                </div>
                 <div class="mode-card" @click=${() => this._saveMode('local')}>
                     <span class="mode-card-title">Use local AI</span>
                     <span class="mode-card-desc">Run Ollama + Whisper on your machine</span>
@@ -901,6 +921,7 @@ export class MainView extends LitElement {
             </div>
 
             <div class="mode-links">
+                <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Claude (Anthropic)</button>
                 <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
             </div>
         `;
@@ -967,6 +988,57 @@ export class MainView extends LitElement {
         `;
     }
 
+    // ── Anthropic mode ──
+
+    _renderAnthropicMode() {
+        return html`
+            <div class="form-group">
+                <label class="form-label">Anthropic API Key</label>
+                <input
+                    type="password"
+                    placeholder="Required"
+                    .value=${this._anthropicKey}
+                    @input=${e => this._saveAnthropicKey(e.target.value)}
+                    class=${this._keyError ? 'error' : ''}
+                />
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://console.anthropic.com/settings/keys')}>Get Anthropic key</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Groq API Key</label>
+                <input
+                    type="password"
+                    placeholder="Required for speech recognition"
+                    .value=${this._groqKey}
+                    @input=${e => this._saveGroqKey(e.target.value)}
+                />
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
+                    &nbsp;— used for Whisper STT
+                </div>
+            </div>
+
+            ${this._renderStartButton()}
+            ${this._renderDivider()}
+
+            <div class="cloud-promo" @click=${() => this._saveMode('cloud')}>
+                <div class="cloud-promo-glow"></div>
+                <div class="cloud-promo-header">
+                    <span class="cloud-promo-title">Switch to Meta Max Pro Cloud</span>
+                    <span class="cloud-promo-arrow">&rarr;</span>
+                </div>
+                <div class="cloud-promo-desc">No API keys, no setup, no billing headaches. It just works.</div>
+            </div>
+
+            <div class="mode-links">
+                <button class="mode-link" @click=${() => this._saveMode('byok')}>Use Gemini instead</button>
+                <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
+            </div>
+        `;
+    }
+
     // ── Main render ──
 
     render() {
@@ -982,15 +1054,21 @@ export class MainView extends LitElement {
                     </div>
                 ` : html`
                     <div class="page-title">
-                        ${this._mode === 'cloud' ? 'Meta Max Pro Cloud' : html`Meta Max Pro <span class="mode-suffix">BYOK</span>`}
+                        ${this._mode === 'cloud' ? 'Meta Max Pro Cloud' :
+                          this._mode === 'anthropic' ? html`Meta Max Pro <span class="mode-suffix">Claude</span>` :
+                          html`Meta Max Pro <span class="mode-suffix">BYOK</span>`}
                     </div>
                 `}
                 <div class="page-subtitle">
-                    ${this._mode === 'cloud' ? 'Enter your invite code to get started' : this._mode === 'byok' ? 'Bring your own API keys' : 'Run models locally on your machine'}
+                    ${this._mode === 'cloud' ? 'Enter your invite code to get started' :
+                      this._mode === 'byok' ? 'Bring your own API keys' :
+                      this._mode === 'anthropic' ? 'Use Claude as your interview AI' :
+                      'Run models locally on your machine'}
                 </div>
 
                 ${this._mode === 'cloud' ? this._renderCloudMode() : ''}
                 ${this._mode === 'byok' ? this._renderByokMode() : ''}
+                ${this._mode === 'anthropic' ? this._renderAnthropicMode() : ''}
                 ${this._mode === 'local' ? (this._showLocalHelp ? this._renderLocalHelp() : this._renderLocalMode()) : ''}
             </div>
         `;

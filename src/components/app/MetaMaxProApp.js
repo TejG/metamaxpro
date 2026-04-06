@@ -581,6 +581,15 @@ export class MetaMaxProApp extends LitElement {
                 }
                 return;
             }
+        } else if (providerMode === 'anthropic') {
+            const success = await metaMaxPro.initializeAnthropic(this.selectedProfile);
+            if (!success) {
+                const mainView = this.shadowRoot.querySelector('main-view');
+                if (mainView && mainView.triggerApiKeyError) {
+                    mainView.triggerApiKeyError();
+                }
+                return;
+            }
         } else {
             const apiKey = await metaMaxPro.storage.getApiKey();
             if (!apiKey || apiKey === '') {

@@ -57,6 +57,13 @@ const storage = {
     async setGroqApiKey(groqApiKey) {
         return ipcRenderer.invoke('storage:set-groq-api-key', groqApiKey);
     },
+    async getAnthropicApiKey() {
+        const result = await ipcRenderer.invoke('storage:get-anthropic-api-key');
+        return result.success ? result.data : '';
+    },
+    async setAnthropicApiKey(anthropicApiKey) {
+        return ipcRenderer.invoke('storage:set-anthropic-api-key', anthropicApiKey);
+    },
 
     // Preferences
     async getPreferences() {
@@ -163,6 +170,24 @@ async function initializeGemini(profile = 'interview', language = 'en-US') {
     }
 }
 
+async function initializeWhisper(profile = 'interview') {
+    const groqApiKey = await storage.getGroqApiKey();
+    if (!groqApiKey || !groqApiKey.trim()) {
+        console.error('Whisper mode requires a Groq API key');
+        metaMaxPro.setStatus('error');
+        return false;
+    }
+    const prefs = await storage.getPreferences();
+    const success = await ipcRenderer.invoke('initialize-whisper', buildContext(prefs), profile);
+    if (success) {
+        metaMaxPro.setStatus('Whisper Live');
+        return true;
+    } else {
+        metaMaxPro.setStatus('error');
+        return false;
+    }
+}
+
 async function initializeLocal(profile = 'interview') {
     const prefs = await storage.getPreferences();
     const ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
@@ -177,6 +202,23 @@ async function initializeLocal(profile = 'interview') {
         metaMaxPro.setStatus('error');
         return false;
     }
+}
+
+async function initializeAnthropic(profile = 'interview') {
+    const anthropicApiKey = await storage.getAnthropicApiKey();
+    if (!anthropicApiKey || !anthropicApiKey.trim()) {
+        console.error('Anthropic mode requires an Anthropic API key');
+        metaMaxPro.setStatus('error');
+        return false;
+    }
+    const prefs = await storage.getPreferences();
+    const success = await ipcRenderer.invoke('initialize-anthropic', buildContext(prefs), profile);
+    if (success) {
+        metaMaxPro.setStatus('Claude Live');
+        return true;
+    }
+    metaMaxPro.setStatus('error');
+    return false;
 }
 
 async function initializeCloud(profile = 'interview') {
@@ -1057,8 +1099,10 @@ const metaMaxPro = {
 
     // Core functionality
     initializeGemini,
+    initializeWhisper,
     initializeCloud,
     initializeLocal,
+    initializeAnthropic,
     startCapture,
     stopCapture,
     sendTextMessage,

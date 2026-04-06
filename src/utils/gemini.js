@@ -3,8 +3,9 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getModelForToday } = require('../storage');
-const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
+const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, getAnthropicApiKey, incrementCharUsage, getModelForToday, saveSession: persistSession } = require('../storage');
+const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, setOnTurnComplete } = require('./cloud');
+const { startWhisperVAD, stopWhisperVAD, processAudioChunk: processWhisperChunk } = require('./whisper');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -44,14 +45,25 @@ module.exports.formatSpeakerResults = formatSpeakerResults;
 
 // Audio capture variables
 let systemAudioProc = null;
-let messageBuffer = '';
 
-// Silence-based early trigger: fire Groq as soon as user stops speaking,
-// without waiting for Gemini to finish generating its audio response.
+// Silence detection: wait for a 1.2s pause after speech before triggering the LLM.
+// Resets on every new transcription chunk.
 let transcriptionSilenceTimer = null;
-const SILENCE_THRESHOLD_MS = 700; // ms of silence after last transcription chunk before triggering
-let sessionReadyAt = 0; // timestamp when session became active — guard against premature triggers
-const SESSION_WARMUP_MS = 2000; // ignore silence triggers for the first 2s of a session
+const SILENCE_THRESHOLD_MS = 1200;
+let sessionReadyAt = 0;
+const SESSION_WARMUP_MS = 2000;
+
+// AbortController for in-flight Groq/Anthropic LLM requests
+let currentGroqAbortController = null;
+
+// Deduplication: don't re-process the same intent twice in a row
+let lastProcessedIntent = '';
+
+// Anthropic sequential question queue — processes questions one at a time in order.
+// Max 2 pending items: if the backlog grows beyond that, the oldest pending is dropped
+// so we never answer questions that are several turns out of date.
+let anthropicQueue = [];
+let anthropicProcessing = false;
 
 function cancelSilenceTimer() {
     if (transcriptionSilenceTimer) {
@@ -60,15 +72,18 @@ function cancelSilenceTimer() {
     }
 }
 
+function cancelProvisionalTimer() {
+    // no-op: provisional tier removed; kept for call-site compatibility
+}
+
 function scheduleGroqTrigger() {
-    // Don't fire during session warmup — avoids SystemAudioDump startup noise triggering Groq
     if (Date.now() - sessionReadyAt < SESSION_WARMUP_MS) return;
 
     cancelSilenceTimer();
+
     transcriptionSilenceTimer = setTimeout(() => {
         transcriptionSilenceTimer = null;
         if (currentTranscription.trim() !== '') {
-            sendToRenderer('new-response', '...');
             if (hasGroqKey()) {
                 sendToGroq(currentTranscription);
             } else {
@@ -117,12 +132,16 @@ function initializeNewSession(profile = null, customPrompt = null) {
     groqConversationHistory = [];
     cancelSilenceTimer();
     sessionReadyAt = 0;
+    lastProcessedIntent = '';
+    anthropicQueue = [];
+    anthropicProcessing = false;
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
     console.log('New conversation session started:', currentSessionId, 'profile:', profile);
 
-    // Save initial session with profile context
+    // Persist session context to disk immediately (no IPC round-trip)
     if (profile) {
+        persistSession(currentSessionId, { profile, customPrompt: customPrompt || '' });
         sendToRenderer('save-session-context', {
             sessionId: currentSessionId,
             profile: profile,
@@ -143,9 +162,12 @@ function saveConversationTurn(transcription, aiResponse) {
     };
 
     conversationHistory.push(conversationTurn);
+
+    // Write directly to disk from main process — survives crashes and renderer busy states
+    persistSession(currentSessionId, { conversationHistory });
     console.log('Saved conversation turn:', conversationTurn);
 
-    // Send to renderer to save in IndexedDB
+    // Also notify renderer (for HistoryView live updates)
     sendToRenderer('save-conversation-turn', {
         sessionId: currentSessionId,
         turn: conversationTurn,
@@ -166,9 +188,12 @@ function saveScreenAnalysis(prompt, response, model) {
     };
 
     screenAnalysisHistory.push(analysisEntry);
+
+    // Write directly to disk from main process
+    persistSession(currentSessionId, { screenAnalysisHistory });
     console.log('Saved screen analysis:', analysisEntry);
 
-    // Send to renderer to save
+    // Also notify renderer (for HistoryView live updates)
     sendToRenderer('save-screen-analysis', {
         sessionId: currentSessionId,
         analysis: analysisEntry,
@@ -241,16 +266,40 @@ function hasGroqKey() {
     return key && key.trim() != ''
 }
 
-// Pre-process noisy speech-to-text transcription before sending to the answer model.
-// Uses llama-3.1-8b-instant (fast, cheap) to infer intent and score confidence.
-// Returns { cleaned, confidence, assumption }
-// confidence: 0.8+ → answer normally | 0.5-0.79 → answer with note | <0.5 → ask to repeat
-async function cleanTranscription(rawText) {
+const CLEAN_TRANSCRIPTION_SYSTEM_PROMPT = `You are an input preprocessing layer for a live interview AI assistant.
+
+Steps (in order):
+1. CLEAN: Remove filler words (um, uh, like, so, you know, basically, right, okay, actually), false starts, and repeated words.
+2. LANGUAGE CHECK: If the input is not in English, set response = "Please ask your question in English." and intent = "non-english".
+3. INTENT: Extract the clean question or request. Fix typos, handle accents, infer intent — do not be literal.
+   - Simple questions: one concise sentence.
+   - Complex/multi-part questions (system design, coding challenges, scenario-based, long explanations): preserve ALL key constraints and requirements. Write 2-3 sentences if needed — do NOT over-compress. The main LLM needs the full scope to give a good answer.
+   - Long rambling input: cut the filler, keep every piece of substance.
+4. CLARITY CHECK: If input is pure noise, a single random word, or completely unintelligible, set response = "Could you repeat that? I didn't catch your question."
+
+Return ONLY valid JSON — no markdown, no extra text:
+{"intent": "full clean question preserving all key details", "response": null, "state": "final"}
+
+Rules:
+- response = null means the question is clear — main LLM will answer it
+- response = string means show this text directly, skip main LLM
+- Input is always from an interviewer asking a software engineering candidate a question`;
+
+// LLM middleware: cleans STT noise, detects language, extracts intent.
+// Routes to Anthropic when in anthropic mode to avoid Groq 429s.
+// Returns { intent, response, state }
+//   response = null → call main LLM
+//   response = text → show directly (non-English rejection or clarification request)
+async function cleanTranscription(rawText, state = 'final') {
+    if (currentProviderMode === 'anthropic') {
+        return cleanTranscriptionWithAnthropic(rawText, state);
+    }
+
     const groqApiKey = getGroqApiKey();
-    if (!groqApiKey) return { cleaned: rawText, confidence: 0.9, assumption: null };
+    if (!groqApiKey) return { intent: rawText, response: null, state };
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const apiResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${groqApiKey}`,
@@ -259,28 +308,7 @@ async function cleanTranscription(rawText) {
             body: JSON.stringify({
                 model: 'llama-3.1-8b-instant',
                 messages: [
-                    {
-                        role: 'system',
-                        content: `You process raw speech-to-text from a live job interview. The input may have transcription errors, cut-off words, mid-sentence pauses, or background noise.
-
-Return ONLY a valid JSON object — no extra text, no markdown:
-{"cleaned": "the intended question clearly rephrased", "confidence": 0.0, "assumption": "what you assumed, or null"}
-
-Rules:
-- cleaned: the full, clear question the interviewer intended to ask
-- confidence: 0.0 (completely unclear) to 1.0 (crystal clear)
-- assumption: brief note on what you inferred if confidence < 0.8, otherwise null
-- If input is already clear, just fix transcription errors and return confidence 1.0
-
-Score confidence LOW (< 0.5) — do NOT attempt an answer — if:
-- Input is a sentence fragment or mid-thought ("so what about the... um")
-- Question is clearly cut off before the actual ask
-- No identifiable question or topic present
-- Input is noise, filler, or fewer than 5 meaningful words
-
-Score confidence MEDIUM (0.5-0.79) if topic is clear but phrasing is garbled or you made a significant inference.
-Score confidence HIGH (0.8-1.0) only when the question is complete and unambiguous.`,
-                    },
+                    { role: 'system', content: CLEAN_TRANSCRIPTION_SYSTEM_PROMPT },
                     { role: 'user', content: rawText },
                 ],
                 max_tokens: 150,
@@ -289,19 +317,97 @@ Score confidence HIGH (0.8-1.0) only when the question is complete and unambiguo
             }),
         });
 
-        if (!response.ok) return { cleaned: rawText, confidence: 0.9, assumption: null };
+        if (!apiResponse.ok) return { intent: rawText, response: null, state };
 
-        const json = await response.json();
+        const json = await apiResponse.json();
         const content = json.choices?.[0]?.message?.content?.trim() || '';
         const result = JSON.parse(content);
         return {
-            cleaned: result.cleaned || rawText,
-            confidence: typeof result.confidence === 'number' ? result.confidence : 0.9,
-            assumption: result.assumption || null,
+            intent: result.intent || rawText,
+            response: result.response || null,
+            state: state,
         };
     } catch (e) {
-        // On any error, pass through raw text
-        return { cleaned: rawText, confidence: 0.9, assumption: null };
+        return { intent: rawText, response: null, state };
+    }
+}
+
+// Retry fetch for Anthropic API — handles 429 (rate limit), 529 (overloaded), 500/503 (server error).
+// Respects abort signal: if the request is aborted mid-retry, returns null immediately.
+// Reads Retry-After header when present.
+async function fetchWithAnthropicRetry(url, options, label = 'Anthropic') {
+    const MAX_RETRIES = 3;
+    let delay = 1000;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (options.signal?.aborted) return null;
+
+        let response;
+        try {
+            response = await fetch(url, options);
+        } catch (err) {
+            if (err.name === 'AbortError') return null;
+            throw err;
+        }
+
+        if (response.ok) return response;
+
+        const status = response.status;
+        const isRetryable = status === 429 || status === 529 || status === 500 || status === 503;
+
+        if (isRetryable && attempt < MAX_RETRIES) {
+            const retryAfterHeader = response.headers?.get('retry-after');
+            const waitMs = retryAfterHeader
+                ? Math.min(parseInt(retryAfterHeader, 10) * 1000, 10000)
+                : delay;
+            console.log(`[${label}] ${status} — retry ${attempt + 1}/${MAX_RETRIES} in ${waitMs}ms`);
+            sendToRenderer('update-status', `Retrying... (${attempt + 1}/${MAX_RETRIES})`);
+            await new Promise(r => setTimeout(r, waitMs));
+            delay = Math.min(delay * 2, 8000);
+            continue;
+        }
+
+        return response; // non-retryable or max retries exhausted
+    }
+    return null;
+}
+
+async function cleanTranscriptionWithAnthropic(rawText, state = 'final') {
+    const anthropicApiKey = getAnthropicApiKey();
+    if (!anthropicApiKey) return { intent: rawText, response: null, state };
+
+    try {
+        const apiResponse = await fetchWithAnthropicRetry(
+            'https://api.anthropic.com/v1/messages',
+            {
+                method: 'POST',
+                headers: {
+                    'x-api-key': anthropicApiKey,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'claude-haiku-4-5-20251001',
+                    max_tokens: 200,
+                    system: CLEAN_TRANSCRIPTION_SYSTEM_PROMPT,
+                    messages: [{ role: 'user', content: rawText }],
+                }),
+            },
+            'Haiku-middleware'
+        );
+
+        if (!apiResponse || !apiResponse.ok) return { intent: rawText, response: null, state };
+
+        const json = await apiResponse.json();
+        const content = json.content?.[0]?.text?.trim() || '';
+        const result = JSON.parse(content);
+        return {
+            intent: result.intent || rawText,
+            response: result.response || null,
+            state: state,
+        };
+    } catch (e) {
+        return { intent: rawText, response: null, state };
     }
 }
 
@@ -337,21 +443,32 @@ async function sendToGroq(transcription) {
         return;
     }
 
-    // Clean noisy speech-to-text before sending to the answer model
-    const { cleaned, confidence, assumption } = await cleanTranscription(transcription);
-    console.log(`Transcription confidence: ${confidence} | cleaned: "${cleaned.substring(0, 80)}"`);
+    // Cancel any in-flight request before starting a new one
+    if (currentGroqAbortController) {
+        currentGroqAbortController.abort();
+        currentGroqAbortController = null;
+    }
 
-    if (confidence < 0.5) {
-        // Too unclear to guess — ask user to repeat
-        const partial = cleaned.substring(0, 60);
-        sendToRenderer('update-response', `Sorry, I only caught part of that — "${partial}…" — could you repeat the question?`);
+    // Clean, language-check, and extract intent via middleware
+    const { intent, response: preflight, state } = await cleanTranscription(transcription, 'final');
+    console.log(`STT [${state}] | "${intent.substring(0, 80)}"`);
+
+    // Non-English or clarification needed — show the preflight response directly
+    if (preflight) {
+        sendToRenderer('new-response', preflight);
         sendToRenderer('update-status', 'Listening...');
         return;
     }
 
-    // Use cleaned transcription; if partially confident, prepend assumption note
-    const questionToAnswer = cleaned;
-    const assumptionPrefix = (confidence < 0.8 && assumption) ? `*(Taking that as: "${assumption}")*\n\n` : '';
+    // Deduplicate: skip if same intent is already answered
+    if (intent === lastProcessedIntent) {
+        console.log('[Middleware] Duplicate intent, skipping');
+        return;
+    }
+    lastProcessedIntent = intent;
+
+    const questionToAnswer = intent;
+    const assumptionPrefix = '';
 
     const modelToUse = getModelForToday();
     if (!modelToUse) {
@@ -372,12 +489,14 @@ async function sendToGroq(transcription) {
     }
 
     try {
+        currentGroqAbortController = new AbortController();
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${groqApiKey}`,
                 'Content-Type': 'application/json'
             },
+            signal: currentGroqAbortController.signal,
             body: JSON.stringify({
                 model: modelToUse,
                 messages: [
@@ -460,8 +579,14 @@ async function sendToGroq(transcription) {
         sendToRenderer('update-status', 'Listening...');
 
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.log('[Groq] Request cancelled — new input arrived');
+            return;
+        }
         console.error('Error calling Groq API:', error);
         sendToRenderer('update-status', 'Groq error: ' + error.message);
+    } finally {
+        currentGroqAbortController = null;
     }
 }
 
@@ -545,6 +670,166 @@ async function sendToGemma(transcription) {
     }
 }
 
+// Enqueue a transcription for sequential Anthropic processing.
+// Keeps at most 2 pending items — drops the oldest pending entry when the backlog
+// exceeds that limit so we never answer questions that are several turns stale.
+function queueForAnthropic(transcription) {
+    if (!transcription || transcription.trim() === '') return;
+
+    if (anthropicQueue.length >= 2) {
+        // Drop oldest pending — it's stale relative to what the interviewer just said
+        anthropicQueue.shift();
+    }
+    anthropicQueue.push(transcription.trim());
+
+    if (!anthropicProcessing) {
+        drainAnthropicQueue();
+    }
+}
+
+async function drainAnthropicQueue() {
+    if (anthropicProcessing) return;
+    anthropicProcessing = true;
+
+    while (anthropicQueue.length > 0) {
+        const next = anthropicQueue.shift();
+        await sendToAnthropic(next);
+    }
+
+    anthropicProcessing = false;
+}
+
+async function sendToAnthropic(transcription) {
+    const anthropicApiKey = getAnthropicApiKey();
+    if (!anthropicApiKey) {
+        console.log('No Anthropic API key configured, skipping');
+        return;
+    }
+
+    if (!transcription || transcription.trim() === '') {
+        console.log('Empty transcription, skipping Anthropic');
+        return;
+    }
+
+    // Signal to the UI immediately — card appears while middleware runs
+    sendToRenderer('new-response', '...');
+    sendToRenderer('update-status', 'Processing...');
+
+    // Middleware: clean STT noise, language check, extract intent
+    const { intent, response: preflight, state } = await cleanTranscription(transcription, 'final');
+    console.log(`[Anthropic STT] [${state}] | "${intent.substring(0, 80)}"`);
+
+    if (preflight) {
+        sendToRenderer('update-response', preflight);
+        sendToRenderer('update-status', 'Listening...');
+        return;
+    }
+
+    if (intent === lastProcessedIntent) {
+        console.log('[Anthropic] Duplicate intent, skipping');
+        return;
+    }
+    lastProcessedIntent = intent;
+
+    const questionToAnswer = intent;
+
+    groqConversationHistory.push({ role: 'user', content: questionToAnswer.trim() });
+    if (groqConversationHistory.length > 20) {
+        groqConversationHistory = groqConversationHistory.slice(-20);
+    }
+
+    // Build messages array (Anthropic format: no system in messages array)
+    const messages = groqConversationHistory.map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+    }));
+
+    console.log(`[Anthropic] Sending to claude-sonnet-4-6: "${questionToAnswer.substring(0, 80)}..."`);
+    sendToRenderer('update-status', 'Thinking...');
+
+    try {
+        currentGroqAbortController = new AbortController();
+        const response = await fetchWithAnthropicRetry(
+            'https://api.anthropic.com/v1/messages',
+            {
+                method: 'POST',
+                headers: {
+                    'x-api-key': anthropicApiKey,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-6',
+                    max_tokens: 4096,
+                    system: currentSystemPrompt || 'You are a helpful assistant.',
+                    messages,
+                    stream: true,
+                }),
+            },
+            'Sonnet'
+        );
+
+        if (!response) {
+            // Aborted — new input arrived, silently discard
+            return;
+        }
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error('[Anthropic] API error after retries:', response.status, errText);
+            sendToRenderer('update-status', `Claude error ${response.status} — please try again`);
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n').filter(l => l.trim() !== '');
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6);
+                if (data === '[DONE]') continue;
+
+                try {
+                    const json = JSON.parse(data);
+                    if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
+                        fullText += json.delta.text;
+                        sendToRenderer('update-response', fullText);
+                    }
+                } catch (_) {
+                    // skip malformed SSE lines
+                }
+            }
+        }
+
+        if (fullText) {
+            groqConversationHistory.push({ role: 'assistant', content: fullText });
+            saveConversationTurn(questionToAnswer, fullText);
+        }
+
+        console.log('[Anthropic] Response completed');
+        sendToRenderer('update-status', 'Listening...');
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            console.log('[Anthropic] Request cancelled — new input arrived');
+            return;
+        }
+        console.error('[Anthropic] Error:', error);
+        sendToRenderer('update-status', 'Claude error: ' + error.message);
+    } finally {
+        currentGroqAbortController = null;
+    }
+}
+
 async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US', isReconnect = false) {
     if (isInitializingSession) {
         console.log('Session initialization already in progress');
@@ -608,9 +893,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     // DISABLED: Gemini's outputTranscription - using Groq for faster responses instead
                     // if (message.serverContent?.outputTranscription?.text) { ... }
 
-                    if (message.serverContent?.generationComplete) {
-                        messageBuffer = '';
-                    }
+
 
                     if (message.serverContent?.turnComplete) {
                         sendToRenderer('update-status', 'Listening...');
@@ -692,9 +975,9 @@ async function attemptReconnect() {
     console.log(`Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
 
     // Clear stale buffers and any pending silence timer
-    messageBuffer = '';
     currentTranscription = '';
     cancelSilenceTimer();
+    cancelProvisionalTimer();
     sessionReadyAt = 0; // reset warmup guard until new session opens
     // Don't reset groqConversationHistory to preserve context across reconnects
 
@@ -834,7 +1117,9 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
             const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
 
-            if (currentProviderMode === 'cloud') {
+            if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
+                processWhisperChunk(monoChunk);
+            } else if (currentProviderMode === 'cloud') {
                 sendCloudAudio(monoChunk);
             } else if (currentProviderMode === 'local') {
                 getLocalAi().processLocalAudio(monoChunk);
@@ -889,6 +1174,9 @@ function stopMacOSAudioCapture() {
         console.log('Stopping SystemAudioDump...');
         systemAudioProc.kill('SIGTERM');
         systemAudioProc = null;
+    }
+    if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
+        stopWhisperVAD();
     }
 }
 
@@ -1011,7 +1299,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
     global.geminiSessionRef = geminiSessionRef;
 
-    ipcMain.handle('initialize-cloud', async (event, token, profile, userContext) => {
+    ipcMain.handle('initialize-cloud', async (_event, token, profile, userContext) => {
         try {
             currentProviderMode = 'cloud';
             initializeNewSession(profile);
@@ -1030,7 +1318,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('initialize-gemini', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
+    ipcMain.handle('initialize-gemini', async (_event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
         currentProviderMode = 'byok';
         const session = await initializeGeminiSession(apiKey, customPrompt, profile, language);
         if (session) {
@@ -1040,7 +1328,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return false;
     });
 
-    ipcMain.handle('initialize-local', async (event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt) => {
+    ipcMain.handle('initialize-local', async (_event, ollamaHost, ollamaModel, whisperModel, profile, customPrompt) => {
         currentProviderMode = 'local';
         const success = await getLocalAi().initializeLocalSession(ollamaHost, ollamaModel, whisperModel, profile, customPrompt);
         if (!success) {
@@ -1049,7 +1337,49 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return success;
     });
 
-    ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
+    ipcMain.handle('initialize-whisper', async (_event, customPrompt, profile = 'interview') => {
+        currentProviderMode = 'whisper';
+        const systemPrompt = getSystemPrompt(profile, customPrompt, false);
+        currentSystemPrompt = systemPrompt;
+        initializeNewSession(profile, customPrompt);
+        sessionReadyAt = Date.now(); // no Gemini startup noise — warmup not needed
+
+        // Callback fires when Whisper VAD detects end of speech and gets a transcript
+        function onWhisperTranscription(transcript) {
+            if (!transcript || transcript.trim() === '') return;
+            sendToRenderer('new-response', '...');
+            if (hasGroqKey()) {
+                sendToGroq(transcript);
+            } else {
+                sendToGemma(transcript);
+            }
+        }
+
+        startWhisperVAD(onWhisperTranscription);
+        sendToRenderer('update-status', 'Whisper Live');
+        console.log('[Whisper] Mode initialized — profile:', profile);
+        return true;
+    });
+
+    ipcMain.handle('initialize-anthropic', async (_event, customPrompt, profile = 'interview') => {
+        currentProviderMode = 'anthropic';
+        const systemPrompt = getSystemPrompt(profile, customPrompt, false);
+        currentSystemPrompt = systemPrompt;
+        initializeNewSession(profile, customPrompt);
+        sessionReadyAt = Date.now();
+
+        function onWhisperTranscription(transcript) {
+            if (!transcript || transcript.trim() === '') return;
+            queueForAnthropic(transcript);
+        }
+
+        startWhisperVAD(onWhisperTranscription);
+        sendToRenderer('update-status', 'Claude Live');
+        console.log('[Anthropic] Mode initialized — profile:', profile);
+        return true;
+    });
+
+    ipcMain.handle('send-audio-content', async (_event, { data, mimeType }) => {
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
@@ -1084,7 +1414,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     // Handle microphone audio on a separate channel
-    ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
+    ipcMain.handle('send-mic-audio-content', async (_event, { data, mimeType }) => {
         if (currentProviderMode === 'cloud') {
             try {
                 const pcmBuffer = Buffer.from(data, 'base64');
@@ -1118,7 +1448,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('send-image-content', async (event, { data, prompt }) => {
+    ipcMain.handle('send-image-content', async (_event, { data, prompt }) => {
         try {
             if (!data || typeof data !== 'string') {
                 console.error('Invalid image data received');
@@ -1156,7 +1486,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('send-multiple-images-content', async (event, { images, prompt }) => {
+    ipcMain.handle('send-multiple-images-content', async (_event, { images, prompt }) => {
         try {
             if (!images || !Array.isArray(images) || images.length === 0) {
                 return { success: false, error: 'No images provided' };
@@ -1182,7 +1512,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('send-text-message', async (event, text) => {
+    ipcMain.handle('send-text-message', async (_event, text) => {
         if (!text || typeof text !== 'string' || text.trim().length === 0) {
             return { success: false, error: 'Invalid text message' };
         }
@@ -1208,6 +1538,20 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
         }
 
+        if (currentProviderMode === 'anthropic') {
+            queueForAnthropic(text.trim());
+            return { success: true };
+        }
+
+        if (currentProviderMode === 'whisper') {
+            if (hasGroqKey()) {
+                sendToGroq(text.trim());
+            } else {
+                sendToGemma(text.trim());
+            }
+            return { success: true };
+        }
+
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
 
         try {
@@ -1227,7 +1571,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('start-macos-audio', async event => {
+    ipcMain.handle('start-macos-audio', async _event => {
         if (process.platform !== 'darwin') {
             return {
                 success: false,
@@ -1244,7 +1588,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('stop-macos-audio', async event => {
+    ipcMain.handle('stop-macos-audio', async _event => {
         try {
             stopMacOSAudioCapture();
             return { success: true };
@@ -1254,7 +1598,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('close-session', async event => {
+    ipcMain.handle('close-session', async _event => {
         try {
             stopMacOSAudioCapture();
 
@@ -1266,6 +1610,12 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
             if (currentProviderMode === 'local') {
                 getLocalAi().closeLocalSession();
+                currentProviderMode = 'byok';
+                return { success: true };
+            }
+
+            if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
+                stopWhisperVAD();
                 currentProviderMode = 'byok';
                 return { success: true };
             }
@@ -1288,7 +1638,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     // Conversation history IPC handlers
-    ipcMain.handle('get-current-session', async event => {
+    ipcMain.handle('get-current-session', async _event => {
         try {
             return { success: true, data: getCurrentSessionData() };
         } catch (error) {
@@ -1297,7 +1647,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('start-new-session', async event => {
+    ipcMain.handle('start-new-session', async _event => {
         try {
             initializeNewSession();
             return { success: true, sessionId: currentSessionId };
@@ -1307,7 +1657,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
-    ipcMain.handle('update-google-search-setting', async (event, enabled) => {
+    ipcMain.handle('update-google-search-setting', async (_event, enabled) => {
         try {
             console.log('Google Search setting updated to:', enabled);
             // The setting is already saved in localStorage by the renderer

@@ -13,7 +13,8 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
-    groqApiKey: ''
+    groqApiKey: '',
+    anthropicApiKey: ''
 };
 
 const DEFAULT_PREFERENCES = {
@@ -77,6 +78,10 @@ function getLimitsPath() {
 
 function getHistoryDir() {
     return path.join(getConfigDir(), 'history');
+}
+
+function getMemoryDir() {
+    return path.join(__dirname, '..', 'memory');
 }
 
 // Helper to read JSON file safely
@@ -156,6 +161,12 @@ function initializeStorage() {
             fs.mkdirSync(historyDir, { recursive: true });
         }
     }
+
+    // Always ensure memory dir exists (app-local session storage)
+    const memoryDir = getMemoryDir();
+    if (!fs.existsSync(memoryDir)) {
+        fs.mkdirSync(memoryDir, { recursive: true });
+    }
 }
 
 // ============ CONFIG ============
@@ -202,6 +213,14 @@ function getGroqApiKey() {
 
 function setGroqApiKey(groqApiKey) {
     return setCredentials({ groqApiKey });
+}
+
+function getAnthropicApiKey() {
+    return getCredentials().anthropicApiKey || '';
+}
+
+function setAnthropicApiKey(anthropicApiKey) {
+    return setCredentials({ anthropicApiKey });
 }
 
 // ============ PREFERENCES ============
@@ -381,7 +400,7 @@ function getModelForToday() {
 // ============ HISTORY ============
 
 function getSessionPath(sessionId) {
-    return path.join(getHistoryDir(), `${sessionId}.json`);
+    return path.join(getMemoryDir(), `${sessionId}.json`);
 }
 
 function saveSession(sessionId, data) {
@@ -409,7 +428,7 @@ function getSession(sessionId) {
 }
 
 function getAllSessions() {
-    const historyDir = getHistoryDir();
+    const historyDir = getMemoryDir();
 
     try {
         if (!fs.existsSync(historyDir)) {
@@ -461,7 +480,7 @@ function deleteSession(sessionId) {
 }
 
 function deleteAllSessions() {
-    const historyDir = getHistoryDir();
+    const historyDir = getMemoryDir();
     try {
         if (fs.existsSync(historyDir)) {
             const files = fs.readdirSync(historyDir).filter(f => f.endsWith('.json'));
@@ -487,6 +506,7 @@ module.exports = {
     // Initialization
     initializeStorage,
     getConfigDir,
+    getMemoryDir,
 
     // Config
     getConfig,
@@ -500,6 +520,8 @@ module.exports = {
     setApiKey,
     getGroqApiKey,
     setGroqApiKey,
+    getAnthropicApiKey,
+    setAnthropicApiKey,
 
     // Preferences
     getPreferences,
