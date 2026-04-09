@@ -19,15 +19,50 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ## Download
 
+### macOS Installation Troubleshooting
+
+If you see a message like "Meta Max Pro is damaged and can’t be opened. You should move it to the Trash":
+
+1. **Remove Quarantine Attribute:**
+	Open Terminal and run:
+	```sh
+	xattr -dr com.apple.quarantine /Applications/Meta\ Max\ Pro.app
+	```
+	(Adjust the path if you installed elsewhere.)
+
+2. **Allow App in Security Settings:**
+	- Go to **System Settings > Privacy & Security**
+	- If you see a warning about Meta Max Pro, click **Allow Anyway**
+
+3. **For Developers:**
+	If you built the app yourself, you may need to codesign it for local use:
+	```sh
+	codesign --deep --force --sign - /path/to/Meta\ Max\ Pro.app
+	```
+
+For production/distribution, the app must be signed and notarized with an Apple Developer ID for best user experience.
+
 | Platform | Link |
 |---|---|
-| macOS (Apple Silicon) | [Meta Max Pro-0.7.0-arm64.dmg](https://github.com/mar7799/demo_poc/releases/download/v0.7.0/Meta.Max.Pro-0.7.0-arm64.dmg) |
+| macOS (Apple Silicon, arm64) | [Meta Max Pro-0.7.0-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0-arm64.dmg) |
+| macOS (Intel, x64) | [Meta Max Pro-0.7.0-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0-x64.dmg) |
+| Windows (x64) | [Meta Max Pro-0.7.0.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0.exe) |
+| Linux (AppImage) | [Meta Max Pro-0.7.0.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0.AppImage) |
 
 ## Setup (Development)
 
+
+### Build from Source
+
 1. **Get a Gemini API Key**: Visit [Google AI Studio](https://aistudio.google.com/apikey)
 2. **Install Dependencies**: `npm install`
-3. **Run the App**: `npm start`
+3. **Run the App (dev mode)**: `npm start`
+4. **Build Installers**:
+	- **macOS (arm64 & x64):** `npm run make` (see `out/make/` for `.dmg` files)
+	- **Windows:** `npm run make` (see `out/make/` for `.exe` installer)
+	- **Linux:** `npm run make` (see `out/make/` for `.AppImage`)
+
+Release builds for all platforms are available on the [Releases page](https://github.com/TejG/metamaxpro/releases).
 
 ## Usage
 

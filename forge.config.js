@@ -8,7 +8,9 @@ module.exports = {
         },
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'Meta Max Pro',
-        icon: 'src/assets/logo',
+    icon: 'src/assets/logo',
+    // Build for both Apple Silicon (arm64) and Intel (x64) Macs
+    arch: ['x64', 'arm64'],
         // use `security find-identity -v -p codesigning` to find your identity
         // for macos signing
         // also fuck apple
