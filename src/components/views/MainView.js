@@ -866,7 +866,7 @@ export class MainView extends LitElement {
                     <span class="mode-card-desc">Bring your own Gemini / Groq keys</span>
                 </div>
                 <div class="mode-card" @click=${() => this._saveMode('anthropic')}>
-                    <span class="mode-card-title">Use Claude (Anthropic)</span>
+                    <span class="mode-card-title">Use Meta Max pro (Anthropic)</span>
                     <span class="mode-card-desc">Anthropic API key + Groq for speech</span>
                 </div>
                 <div class="mode-card" @click=${() => this._saveMode('local')}>
@@ -922,6 +922,7 @@ export class MainView extends LitElement {
 
             <div class="mode-links">
                 <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Claude (Anthropic)</button>
+                <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Meta Max pro (Anthropic)</button>
                 <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
             </div>
         `;
@@ -1055,14 +1056,14 @@ export class MainView extends LitElement {
                 ` : html`
                     <div class="page-title">
                         ${this._mode === 'cloud' ? 'Meta Max Pro Cloud' :
-                          this._mode === 'anthropic' ? html`Meta Max Pro <span class="mode-suffix">Claude</span>` :
+                          this._mode === 'anthropic' ? html`Meta Max pro <span class="mode-suffix">pro</span>` :
                           html`Meta Max Pro <span class="mode-suffix">BYOK</span>`}
                     </div>
                 `}
                 <div class="page-subtitle">
                     ${this._mode === 'cloud' ? 'Enter your invite code to get started' :
                       this._mode === 'byok' ? 'Bring your own API keys' :
-                      this._mode === 'anthropic' ? 'Use Claude as your interview AI' :
+                      this._mode === 'anthropic' ? 'Use Meta Max pro as your interview AI' :
                       'Run models locally on your machine'}
                 </div>
 
