@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Convert raw PCM to WAV format for easier playback and verification
-function pcmToWav(pcmBuffer, outputPath, sampleRate = 24000, channels = 1, bitDepth = 16) {
+function pcmToWav(pcmBuffer, outputPath, sampleRate = 16000, channels = 1, bitDepth = 16) {
     const byteRate = sampleRate * channels * (bitDepth / 8);
     const blockAlign = channels * (bitDepth / 8);
     const dataSize = pcmBuffer.length;
@@ -113,7 +113,7 @@ function saveDebugAudio(buffer, type, timestamp = Date.now()) {
                 bufferSize: buffer.length,
                 analysis,
                 format: {
-                    sampleRate: 24000,
+                    sampleRate: 16000,
                     channels: 1,
                     bitDepth: 16,
                 },

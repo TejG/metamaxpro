@@ -1,11 +1,11 @@
 const { getGroqApiKey } = require('../storage');
 
 // Voice Activity Detection parameters
-const SPEECH_RMS_THRESHOLD = 500;   // RMS amplitude above this = speech (tune if too sensitive)
-const SILENCE_DURATION_MS = 700;    // ms of silence after speech to trigger transcription
-const MIN_SPEECH_DURATION_MS = 400; // minimum audio length to attempt transcription
-const MAX_BUFFER_DURATION_MS = 30000; // cap at 30s to prevent oversized API calls
-const SAMPLE_RATE = 24000;
+const SPEECH_RMS_THRESHOLD = 3000;   // Higher threshold to ignore breathing/mic noise
+const SILENCE_DURATION_MS = 1800;   // Increased to 1.8 seconds to allow for natural mid-sentence pauses
+const MIN_SPEECH_DURATION_MS = 250; // Quicker response for short utterances
+const MAX_BUFFER_DURATION_MS = 45000; // Trigger STT forcefully if they talk for >45s
+const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
 
 let speechBuffer = Buffer.alloc(0);
@@ -13,6 +13,7 @@ let isSpeaking = false;
 let silenceTimer = null;
 let onTranscriptionCallback = null;
 let isActive = false;
+let noiseFloor = 300; // adaptive baseline
 
 // Calculate RMS amplitude of a mono 16-bit PCM buffer
 function getRms(pcmBuffer) {
@@ -58,6 +59,8 @@ function pcmToWavBuffer(pcmBuffer) {
 }
 
 async function triggerTranscription() {
+    cancelSilenceTimer();
+    
     if (!onTranscriptionCallback || speechBuffer.length === 0) return;
 
     const buffer = speechBuffer;
@@ -117,19 +120,30 @@ function processAudioChunk(monoChunk) {
 
     const rms = getRms(monoChunk);
 
-    if (rms > SPEECH_RMS_THRESHOLD) {
+    // Slowly adapt the noise floor when someone is NOT actively speaking
+    if (!isSpeaking) {
+        noiseFloor = (noiseFloor * 0.8) + (rms * 0.2);
+    }
+    
+    // Dynamic threshold: at least SPEECH_RMS_THRESHOLD, but dynamically scales 
+    // above ambient room noise (e.g. static/humming).
+    const dynamicThreshold = Math.max(SPEECH_RMS_THRESHOLD, noiseFloor * 2.5);
+
+    if (rms > dynamicThreshold) {
         if (!isSpeaking) {
             isSpeaking = true;
-            console.log(`[Whisper VAD] Speech started (RMS: ${rms.toFixed(0)})`);
+            console.log(`[Whisper VAD] Speech started (RMS: ${rms.toFixed(0)}, Threshold: ${dynamicThreshold.toFixed(0)})`);
         }
         cancelSilenceTimer();
 
         speechBuffer = Buffer.concat([speechBuffer, monoChunk]);
 
-        // Cap buffer to prevent sending enormous audio files to Whisper
+        // Force a transcription trigger if they speak continuously for > MAX_BUFFER_DURATION_MS
+        // This prevents capturing forever due to background static noise.
         const maxBytes = (MAX_BUFFER_DURATION_MS / 1000) * SAMPLE_RATE * BYTES_PER_SAMPLE;
-        if (speechBuffer.length > maxBytes) {
-            speechBuffer = speechBuffer.slice(-maxBytes);
+        if (speechBuffer.length >= maxBytes) {
+            console.log(`[Whisper VAD] Hit max duration (${MAX_BUFFER_DURATION_MS / 1000}s), forcing trigger.`);
+            triggerTranscription();
         }
     } else if (isSpeaking) {
         // Silence detected while speech was active — include trailing silence, start countdown

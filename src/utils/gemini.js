@@ -449,8 +449,12 @@ async function sendToGroq(transcription) {
         currentGroqAbortController = null;
     }
 
-    // Clean, language-check, and extract intent via middleware
-    const { intent, response: preflight, state } = await cleanTranscription(transcription, 'final');
+    // Bypassing middleware (cleanTranscription) to achieve real-time (1-2s) performance.
+    // The STT intent will be sent directly to the model.
+    const intent = transcription.trim();
+    const state = 'final';
+    const preflight = null;
+
     console.log(`STT [${state}] | "${intent.substring(0, 80)}"`);
 
     // Non-English or clarification needed — show the preflight response directly
@@ -521,17 +525,20 @@ async function sendToGroq(transcription) {
         const decoder = new TextDecoder();
         let fullText = '';
         let inThinkBlock = false;
+        let streamBuffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim() !== '');
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
 
             for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
+                const trimmedLine = line.trim();
+                if (trimmedLine.startsWith('data: ')) {
+                    const data = trimmedLine.slice(6);
                     if (data === '[DONE]') continue;
 
                     try {
@@ -715,8 +722,11 @@ async function sendToAnthropic(transcription) {
     sendToRenderer('new-response', '...');
     sendToRenderer('update-status', 'Processing...');
 
-    // Middleware: clean STT noise, language check, extract intent
-    const { intent, response: preflight, state } = await cleanTranscription(transcription, 'final');
+    // Middleware skipped to achieve < 2s real-time performance.
+    const intent = transcription.trim();
+    const state = 'final';
+    const preflight = null;
+    
     console.log(`[Anthropic STT] [${state}] | "${intent.substring(0, 80)}"`);
 
     if (preflight) {
@@ -756,13 +766,20 @@ async function sendToAnthropic(transcription) {
                 headers: {
                     'x-api-key': anthropicApiKey,
                     'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
                     'content-type': 'application/json',
                 },
                 signal: currentGroqAbortController.signal,
                 body: JSON.stringify({
                     model: 'claude-sonnet-4-6',
                     max_tokens: 4096,
-                    system: currentSystemPrompt || 'You are a helpful assistant.',
+                    system: [
+                        {
+                            type: 'text',
+                            text: currentSystemPrompt || 'You are a helpful assistant.',
+                            cache_control: { type: 'ephemeral' }
+                        }
+                    ],
                     messages,
                     stream: true,
                 }),
@@ -785,17 +802,20 @@ async function sendToAnthropic(transcription) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullText = '';
+        let streamBuffer = '';
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(l => l.trim() !== '');
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
 
             for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                const data = line.slice(6);
+                const trimmedLine = line.trim();
+                if (!trimmedLine.startsWith('data: ')) continue;
+                const data = trimmedLine.slice(6);
                 if (data === '[DONE]') continue;
 
                 try {
@@ -1107,6 +1127,31 @@ async function startMacOSAudioCapture(geminiSessionRef) {
     const CHUNK_SIZE = SAMPLE_RATE * BYTES_PER_SAMPLE * CHANNELS * CHUNK_DURATION;
 
     let audioBuffer = Buffer.alloc(0);
+    let resampleRemainder = Buffer.alloc(0);
+
+    function resample24kTo16k(inputBuffer) {
+        const combined = Buffer.concat([resampleRemainder, inputBuffer]);
+        const inputSamples = Math.floor(combined.length / 2);
+        const outputSamples = Math.floor((inputSamples * 2) / 3);
+        const outputBuffer = Buffer.alloc(outputSamples * 2);
+
+        for (let i = 0; i < outputSamples; i++) {
+            const srcPos = (i * 3) / 2;
+            const srcIndex = Math.floor(srcPos);
+            const frac = srcPos - srcIndex;
+
+            const s0 = combined.readInt16LE(srcIndex * 2);
+            const s1 = srcIndex + 1 < inputSamples ? combined.readInt16LE((srcIndex + 1) * 2) : s0;
+            const interpolated = Math.round(s0 + frac * (s1 - s0));
+            outputBuffer.writeInt16LE(Math.max(-32768, Math.min(32767, interpolated)), i * 2);
+        }
+
+        const consumedInputSamples = Math.ceil((outputSamples * 3) / 2);
+        const remainderStart = consumedInputSamples * 2;
+        resampleRemainder = remainderStart < combined.length ? combined.slice(remainderStart) : Buffer.alloc(0);
+
+        return outputBuffer;
+    }
 
     systemAudioProc.stdout.on('data', data => {
         audioBuffer = Buffer.concat([audioBuffer, data]);
@@ -1115,22 +1160,23 @@ async function startMacOSAudioCapture(geminiSessionRef) {
             const chunk = audioBuffer.slice(0, CHUNK_SIZE);
             audioBuffer = audioBuffer.slice(CHUNK_SIZE);
 
-            const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
+            const monoChunk24k = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
+            const monoChunk16k = resample24kTo16k(monoChunk24k);
 
             if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
-                processWhisperChunk(monoChunk);
+                processWhisperChunk(monoChunk16k);
             } else if (currentProviderMode === 'cloud') {
-                sendCloudAudio(monoChunk);
+                sendCloudAudio(monoChunk16k);
             } else if (currentProviderMode === 'local') {
-                getLocalAi().processLocalAudio(monoChunk);
+                getLocalAi().processLocalAudio(monoChunk24k);
             } else {
-                const base64Data = monoChunk.toString('base64');
+                const base64Data = monoChunk16k.toString('base64');
                 sendAudioToGemini(base64Data, geminiSessionRef);
             }
 
             if (process.env.DEBUG_AUDIO) {
                 console.log(`Processed audio chunk: ${chunk.length} bytes`);
-                saveDebugAudio(monoChunk, 'system_audio');
+                saveDebugAudio(monoChunk16k, 'system_audio');
             }
         }
 
@@ -1188,7 +1234,7 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
         await geminiSessionRef.current.sendRealtimeInput({
             audio: {
                 data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
+                mimeType: 'audio/pcm;rate=16000',
             },
         });
     } catch (error) {

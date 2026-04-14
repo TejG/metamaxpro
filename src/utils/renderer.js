@@ -6,8 +6,11 @@ let screenshotInterval = null;
 let audioContext = null;
 let audioProcessor = null;
 let micAudioProcessor = null;
+let micAudioContext = null;
+let micSourceNode = null;
+let systemSourceNode = null;
 let audioBuffer = [];
-const SAMPLE_RATE = 24000;
+const SAMPLE_RATE = 16000;
 const AUDIO_CHUNK_DURATION = 0.1; // seconds
 const BUFFER_SIZE = 4096; // Increased buffer size for smoother audio
 
@@ -413,9 +416,9 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 }
 
 function setupLinuxMicProcessing(micStream) {
-    // Setup microphone audio processing for Linux
-    const micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const micSource = micAudioContext.createMediaStreamSource(micStream);
+    // Setup microphone audio processing using global contexts to prevent garbage collection
+    micAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    micSourceNode = micAudioContext.createMediaStreamSource(micStream);
     const micProcessor = micAudioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     let audioBuffer = [];
@@ -433,12 +436,12 @@ function setupLinuxMicProcessing(micStream) {
 
             await ipcRenderer.invoke('send-mic-audio-content', {
                 data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
+                mimeType: 'audio/pcm;rate=16000',
             });
         }
     };
 
-    micSource.connect(micProcessor);
+    micSourceNode.connect(micProcessor);
     micProcessor.connect(micAudioContext.destination);
 
     // Store processor reference for cleanup
@@ -448,7 +451,7 @@ function setupLinuxMicProcessing(micStream) {
 function setupLinuxSystemAudioProcessing() {
     // Setup system audio processing for Linux (from getDisplayMedia)
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const source = audioContext.createMediaStreamSource(mediaStream);
+    systemSourceNode = audioContext.createMediaStreamSource(mediaStream);
     audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     let audioBuffer = [];
@@ -466,19 +469,19 @@ function setupLinuxSystemAudioProcessing() {
 
             await ipcRenderer.invoke('send-audio-content', {
                 data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
+                mimeType: 'audio/pcm;rate=16000',
             });
         }
     };
 
-    source.connect(audioProcessor);
+    systemSourceNode.connect(audioProcessor);
     audioProcessor.connect(audioContext.destination);
 }
 
 function setupWindowsLoopbackProcessing() {
     // Setup audio processing for Windows loopback audio only
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    const source = audioContext.createMediaStreamSource(mediaStream);
+    systemSourceNode = audioContext.createMediaStreamSource(mediaStream);
     audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
     let audioBuffer = [];
@@ -496,12 +499,12 @@ function setupWindowsLoopbackProcessing() {
 
             await ipcRenderer.invoke('send-audio-content', {
                 data: base64Data,
-                mimeType: 'audio/pcm;rate=24000',
+                mimeType: 'audio/pcm;rate=16000',
             });
         }
     };
 
-    source.connect(audioProcessor);
+    systemSourceNode.connect(audioProcessor);
     audioProcessor.connect(audioContext.destination);
 }
 
@@ -739,6 +742,11 @@ function stopCapture() {
         screenshotInterval = null;
     }
 
+    if (systemSourceNode) {
+        systemSourceNode.disconnect();
+        systemSourceNode = null;
+    }
+
     if (audioProcessor) {
         audioProcessor.disconnect();
         audioProcessor = null;
@@ -748,6 +756,16 @@ function stopCapture() {
     if (micAudioProcessor) {
         micAudioProcessor.disconnect();
         micAudioProcessor = null;
+    }
+
+    if (micSourceNode) {
+        micSourceNode.disconnect();
+        micSourceNode = null;
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close();
+        micAudioContext = null;
     }
 
     if (audioContext) {
