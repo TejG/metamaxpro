@@ -81,7 +81,7 @@ function getHistoryDir() {
 }
 
 function getMemoryDir() {
-    return path.join(__dirname, '..', 'memory');
+    return path.join(getConfigDir(), 'memory');
 }
 
 // Helper to read JSON file safely
