@@ -17,7 +17,7 @@
         "meta booster pro ai assistant",
         "meta booster pro ai assistant for interviews"
     ],
-    "author": "",
+    "author": "TejG",
     "license": "GPL-3.0",
     "dependencies": {
         "@google/genai": "^1.2.0",
