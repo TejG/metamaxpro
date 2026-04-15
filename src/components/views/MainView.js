@@ -1056,7 +1056,7 @@ export class MainView extends LitElement {
                 ` : html`
                     <div class="page-title">
                         ${this._mode === 'cloud' ? 'Meta Booster Pro Cloud' :
-                          this._mode === 'anthropic' ? html`Meta Booster Pro <span class="mode-suffix">pro</span>` :
+                          this._mode === 'anthropic' ? html`Meta Booster Pro` :
                           html`Meta Booster Pro <span class="mode-suffix">BYOK</span>`}
                     </div>
                 `}
