@@ -1,6 +1,6 @@
 # Repo Guidelines
 
-Meta Max Pro is an Electron-based real‑time assistant which captures screen and audio
+Meta Booster Pro is an Electron-based real‑time assistant which captures screen and audio
 for contextual AI responses. The code is JavaScript and uses Electron Forge for
 packaging.
 

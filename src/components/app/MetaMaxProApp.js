@@ -792,7 +792,7 @@ export class MetaMaxProApp extends LitElement {
         return html`
             <div class="sidebar ${this._isLiveMode() ? 'hidden' : ''}">
                 <div class="sidebar-brand">
-                    <h1>Meta Max Pro</h1>
+                    <h1>Meta Booster Pro</h1>
                 </div>
                 <nav class="sidebar-nav">
                     ${items.map(item => html`

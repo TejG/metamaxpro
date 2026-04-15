@@ -228,15 +228,15 @@ export class AppHeader extends LitElement {
 
     getViewTitle() {
         const titles = {
-            onboarding: 'Welcome to Meta Max Pro',
-            main: 'Meta Max Pro',
+            onboarding: 'Welcome to Meta Booster Pro',
+            main: 'Meta Booster Pro',
             customize: 'Customize',
             help: 'Help & Shortcuts',
             history: 'Conversation History',
             advanced: 'Advanced Tools',
-            assistant: 'Meta Max Pro',
+            assistant: 'Meta Booster Pro',
         };
-        return titles[this.currentView] || 'Meta Max Pro';
+        return titles[this.currentView] || 'Meta Booster Pro';
     }
 
     getElapsedTime() {

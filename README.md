@@ -1,4 +1,4 @@
-# Meta Max Pro
+# Meta Booster Pro
 
 > [!NOTE]
 > Use latest MacOS and Windows version, older versions have limited support
@@ -21,7 +21,7 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ### macOS Installation Troubleshooting
 
-If you see a message like "Meta Max Pro is damaged and can’t be opened. You should move it to the Trash":
+If you see a message like "Meta Booster Pro is damaged and can’t be opened. You should move it to the Trash":
 
 1. **Remove Quarantine Attribute:**
 	Open Terminal and run:
@@ -32,7 +32,7 @@ If you see a message like "Meta Max Pro is damaged and can’t be opened. You sh
 
 2. **Allow App in Security Settings:**
 	- Go to **System Settings > Privacy & Security**
-	- If you see a warning about Meta Max Pro, click **Allow Anyway**
+	- If you see a warning about Meta Booster Pro, click **Allow Anyway**
 
 3. **For Developers:**
 	If you built the app yourself, you may need to codesign it for local use:
@@ -44,10 +44,10 @@ For production/distribution, the app must be signed and notarized with an Apple 
 
 | Platform | Link |
 |---|---|
-| macOS (Apple Silicon, arm64) | [Meta Max Pro-0.7.0-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0-arm64.dmg) |
-| macOS (Intel, x64) | [Meta Max Pro-0.7.0-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0-x64.dmg) |
-| Windows (x64) | [Meta Max Pro-0.7.0.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0.exe) |
-| Linux (AppImage) | [Meta Max Pro-0.7.0.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Max.Pro-0.7.0.AppImage) |
+| macOS (Apple Silicon, arm64) | [Meta Booster Pro-0.8.3-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.3-arm64.dmg) |
+| macOS (Intel, x64) | [Meta Booster Pro-0.8.3-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.3-x64.dmg) |
+| Windows (x64) | [Meta Booster Pro-0.8.3.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.3.exe) |
+| Linux (AppImage) | [Meta Booster Pro-0.8.3.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.3.AppImage) |
 
 ## Setup (Development)
 

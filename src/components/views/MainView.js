@@ -866,7 +866,7 @@ export class MainView extends LitElement {
                     <span class="mode-card-desc">Bring your own Gemini / Groq keys</span>
                 </div>
                 <div class="mode-card" @click=${() => this._saveMode('anthropic')}>
-                    <span class="mode-card-title">Use Meta Max pro (Anthropic)</span>
+                    <span class="mode-card-title">Use Meta Booster Pro (Anthropic)</span>
                     <span class="mode-card-desc">Anthropic API key + Groq for speech</span>
                 </div>
                 <div class="mode-card" @click=${() => this._saveMode('local')}>
@@ -914,7 +914,7 @@ export class MainView extends LitElement {
             <div class="cloud-promo" @click=${() => this._saveMode('cloud')}>
                 <div class="cloud-promo-glow"></div>
                 <div class="cloud-promo-header">
-                    <span class="cloud-promo-title">Switch to Meta Max Pro Cloud</span>
+                    <span class="cloud-promo-title">Switch to Meta Booster Pro Cloud</span>
                     <span class="cloud-promo-arrow">&rarr;</span>
                 </div>
                 <div class="cloud-promo-desc">No API keys, no setup, no billing headaches. It just works.</div>
@@ -922,7 +922,7 @@ export class MainView extends LitElement {
 
             <div class="mode-links">
                 <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Claude (Anthropic)</button>
-                <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Meta Max pro (Anthropic)</button>
+                <button class="mode-link" @click=${() => this._saveMode('anthropic')}>Use Meta Booster Pro (Anthropic)</button>
                 <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
             </div>
         `;
@@ -977,7 +977,7 @@ export class MainView extends LitElement {
             <div class="cloud-promo" @click=${() => this._saveMode('cloud')}>
                 <div class="cloud-promo-glow"></div>
                 <div class="cloud-promo-header">
-                    <span class="cloud-promo-title">Switch to Meta Max Pro Cloud</span>
+                    <span class="cloud-promo-title">Switch to Meta Booster Pro Cloud</span>
                     <span class="cloud-promo-arrow">&rarr;</span>
                 </div>
                 <div class="cloud-promo-desc">No API keys, no setup, no billing headaches. It just works.</div>
@@ -1027,7 +1027,7 @@ export class MainView extends LitElement {
             <div class="cloud-promo" @click=${() => this._saveMode('cloud')}>
                 <div class="cloud-promo-glow"></div>
                 <div class="cloud-promo-header">
-                    <span class="cloud-promo-title">Switch to Meta Max Pro Cloud</span>
+                    <span class="cloud-promo-title">Switch to Meta Booster Pro Cloud</span>
                     <span class="cloud-promo-arrow">&rarr;</span>
                 </div>
                 <div class="cloud-promo-desc">No API keys, no setup, no billing headaches. It just works.</div>
@@ -1050,20 +1050,20 @@ export class MainView extends LitElement {
             <div class="form-wrapper">
                 ${this._mode === 'local' ? html`
                     <div class="title-row">
-                        <div class="page-title">Meta Max Pro <span class="mode-suffix">Local AI</span></div>
+                        <div class="page-title">Meta Booster Pro <span class="mode-suffix">Local AI</span></div>
                         <button class="help-btn" @click=${() => { this._showLocalHelp = !this._showLocalHelp; }}>${this._showLocalHelp ? closeIcon : helpIcon}</button>
                     </div>
                 ` : html`
                     <div class="page-title">
-                        ${this._mode === 'cloud' ? 'Meta Max Pro Cloud' :
-                          this._mode === 'anthropic' ? html`Meta Max pro <span class="mode-suffix">pro</span>` :
-                          html`Meta Max Pro <span class="mode-suffix">BYOK</span>`}
+                        ${this._mode === 'cloud' ? 'Meta Booster Pro Cloud' :
+                          this._mode === 'anthropic' ? html`Meta Booster Pro <span class="mode-suffix">pro</span>` :
+                          html`Meta Booster Pro <span class="mode-suffix">BYOK</span>`}
                     </div>
                 `}
                 <div class="page-subtitle">
                     ${this._mode === 'cloud' ? 'Enter your invite code to get started' :
                       this._mode === 'byok' ? 'Bring your own API keys' :
-                      this._mode === 'anthropic' ? 'Use Meta Max pro as your interview AI' :
+                      this._mode === 'anthropic' ? 'Use Meta Booster Pro as your interview AI' :
                       'Run models locally on your machine'}
                 </div>
 

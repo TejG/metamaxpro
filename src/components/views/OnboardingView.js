@@ -312,7 +312,7 @@ export class OnboardingView extends LitElement {
         if (this.currentSlide === 0) {
             return html`
                 <div class="slide">
-                    <div class="slide-title">Meta Max Pro</div>
+                    <div class="slide-title">Meta Booster Pro</div>
                     <div class="slide-text">Real-time AI that listens, watches, and helps during interviews, meetings, and exams.</div>
                     <div class="actions">
                         <button class="btn-primary" @click=${() => { this.currentSlide = 1; }}>Continue</button>

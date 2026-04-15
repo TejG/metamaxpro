@@ -1,8 +1,8 @@
 {
-    "name": "meta-max-pro",
-    "productName": "Meta Max Pro",
-    "version": "0.8.2",
-    "description": "Meta Max Pro",
+    "name": "meta-booster-pro",
+    "productName": "Meta Booster Pro",
+    "version": "0.8.3",
+    "description": "Meta Booster Pro",
     "main": "src/index.js",
     "scripts": {
         "start": "electron-forge start",
@@ -12,10 +12,10 @@
         "lint": "echo \"No linting configured\""
     },
     "keywords": [
-        "meta max pro",
-        "meta max pro ai",
-        "meta max pro ai assistant",
-        "meta max pro ai assistant for interviews"
+        "meta booster pro",
+        "meta booster pro ai",
+        "meta booster pro ai assistant",
+        "meta booster pro ai assistant for interviews"
     ],
     "author": "",
     "license": "GPL-3.0",

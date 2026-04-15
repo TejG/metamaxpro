@@ -1,4 +1,4 @@
-# Meta Max Pro — Project ADR & Architecture Reference
+# Meta Booster Pro — Project ADR & Architecture Reference
 
 > Use this file as the primary reference when making changes, adding features, or debugging.
 > Update this file whenever a significant decision is made or the architecture changes.
@@ -7,7 +7,7 @@
 
 ## What This Is
 
-Meta Max Pro is a real-time AI interview assistant built as an Electron app. It listens to the interviewer's voice in real-time, transcribes what they say, and generates a spoken-style answer that the candidate can read and speak naturally — grounded in their resume and tailored to the target job description.
+Meta Booster Pro is a real-time AI interview assistant built as an Electron app. It listens to the interviewer's voice in real-time, transcribes what they say, and generates a spoken-style answer that the candidate can read and speak naturally — grounded in their resume and tailored to the target job description.
 
 **The core promise:** Within 1-2 seconds of the interviewer finishing their question, a natural-sounding answer starts appearing on screen. The answer should be indistinguishable from something a prepared, experienced human would say.
 
