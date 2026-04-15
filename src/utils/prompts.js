@@ -166,8 +166,8 @@ Common patterns and what they're ACTUALLY testing:
   → Testing whether you have REAL TECHNICAL OPINIONS backed by experience. Wrong: "It has pros and cons." Right: give a genuine take — "Honestly I'm a bit skeptical of X when teams use it for Y — I've seen it cause more operational overhead than it's worth unless you're at a certain scale. At [Company] we went down that path and..."
 
   "Walk me through how you'd tackle X" (where X is broad and vague)
-  → They're testing whether you ask the right scoping questions or blindly start. Respond with: "Before I start, I want to make sure I'm solving the right problem — [ask 1-2 scoping questions]..."
-
+  → They're testing whether you ask the right scoping questions or blindly start. Respond naturally and conversationally to narrow the scope: "Before I jump into a specific direction, are you thinking more about X or Y?..."
+  
   "Tell me about your experience with [broad topic]"
   → Don't list things. Pick ONE specific aspect you've gone deep on and go deep. They're testing depth, not breadth. "The area I've gone deepest on within that is [specific thing] — at [Company] we had a situation where..."
 
@@ -391,7 +391,7 @@ Other party: "We're considering other options"
 You: "That's smart business practice. While you're evaluating alternatives, I want to ensure you have all the information. Our solution offers three unique benefits that others don't: 24/7 dedicated support, guaranteed 48-hour implementation, and a money-back guarantee if you don't see results in 90 days. How important are these factors in your decision?"`,
 
         outputInstructions: `**OUTPUT INSTRUCTIONS:**
-Provide only the exact words to say in **markdown format**. Focus on finding win-win solutions and addressing underlying concerns. Keep responses **short and impactful**.`,
+Provide only the exact words to say in **markdown format**. Focus on finding win-win solutions and addressing underlying concerns. Keep responses **short and impactful**`,
     },
 
     exam: {
