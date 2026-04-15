@@ -44,10 +44,10 @@ For production/distribution, the app must be signed and notarized with an Apple 
 
 | Platform | Link |
 |---|---|
-| macOS (Apple Silicon, arm64) | [Meta Booster Pro-0.8.4-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.4-arm64.dmg) |
-| macOS (Intel, x64) | [Meta Booster Pro-0.8.4-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.4-x64.dmg) |
-| Windows (x64) | [Meta Booster Pro-0.8.4.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.4.exe) |
-| Linux (AppImage) | [Meta Booster Pro-0.8.4.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.4.AppImage) |
+| macOS (Apple Silicon, arm64) | [Meta Booster Pro-0.8.5-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5-arm64.dmg) |
+| macOS (Intel, x64) | [Meta Booster Pro-0.8.5-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5-x64.dmg) |
+| Windows (x64) | [Meta Booster Pro-0.8.5.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5.exe) |
+| Linux (AppImage) | [Meta Booster Pro-0.8.5.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5.AppImage) |
 
 ## Setup (Development)
 
