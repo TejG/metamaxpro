@@ -26,7 +26,7 @@ If you see a message like "Meta Booster Pro is damaged and can’t be opened. Yo
 1. **Remove Quarantine Attribute:**
 	Open Terminal and run:
 	```sh
-	xattr -dr com.apple.quarantine /Applications/Meta\ Max\ Pro.app
+	xattr -dr com.apple.quarantine /Applications/Meta\ Booster\ Pro.app
 	```
 	(Adjust the path if you installed elsewhere.)
 
@@ -37,7 +37,7 @@ If you see a message like "Meta Booster Pro is damaged and can’t be opened. Yo
 3. **For Developers:**
 	If you built the app yourself, you may need to codesign it for local use:
 	```sh
-	codesign --deep --force --sign - /path/to/Meta\ Max\ Pro.app
+	codesign --deep --force --sign - /path/to/Meta\ Booster\ Pro.app
 	```
 
 For production/distribution, the app must be signed and notarized with an Apple Developer ID for best user experience.
