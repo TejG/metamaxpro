@@ -266,26 +266,14 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
 
-            // Get screen capture for screenshots.
-            // We use desktopCapturer (via IPC) + getUserMedia with chromeMediaSourceId
-            // instead of getDisplayMedia to avoid triggering the macOS screen-sharing
-            // indicator in the menu bar.
-            const sourceId = await ipcRenderer.invoke('get-screen-source-id');
-            if (!sourceId) throw new Error('No screen source found via desktopCapturer');
-            mediaStream = await navigator.mediaDevices.getUserMedia({
+            // Get screen capture for screenshots
+            mediaStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
-                    mandatory: {
-                        chromeMediaSource: 'desktop',
-                        chromeMediaSourceId: sourceId,
-                        minFrameRate: 1,
-                        maxFrameRate: 1,
-                        minWidth: 1280,
-                        maxWidth: 1920,
-                        minHeight: 720,
-                        maxHeight: 1080,
-                    },
+                    frameRate: 1,
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
                 },
-                audio: false,
+                audio: false, // Don't use browser audio on macOS
             });
 
             console.log('macOS screen capture started - audio handled by SystemAudioDump');            if (audioMode === 'mic_only' || audioMode === 'both') {

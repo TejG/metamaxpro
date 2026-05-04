@@ -27,26 +27,15 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         backgroundColor: '#00000000',
     });
 
-    const { session, desktopCapturer, ipcMain: _ipc } = require('electron');
-
-    // Silently auto-approve display media requests without using the system picker.
-    // useSystemPicker:false prevents macOS from showing the screen-sharing indicator in the menu bar.
+    const { session, desktopCapturer } = require('electron');
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
                 callback({ video: sources[0], audio: 'loopback' });
             });
         },
-        { useSystemPicker: false }
+        { useSystemPicker: true }
     );
-
-    // IPC handler so the renderer can get a desktopCapturer source ID and use
-    // getUserMedia({chromeMediaSourceId}) instead of getDisplayMedia, which avoids
-    // triggering the macOS "screen sharing" indicator in the menu bar entirely.
-    ipcMain.handle('get-screen-source-id', async () => {
-        const sources = await desktopCapturer.getSources({ types: ['screen'] });
-        return sources[0]?.id || null;
-    });
 
     mainWindow.setResizable(false);
     mainWindow.setContentProtection(true);

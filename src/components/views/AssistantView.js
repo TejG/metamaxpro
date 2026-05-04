@@ -230,6 +230,81 @@ export class AssistantView extends LitElement {
             text-align: center;
         }
 
+        /* ── Bookmark chips strip ── */
+
+        .bookmark-strip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px var(--space-md);
+            background: var(--bg-app);
+            border-top: 1px solid var(--border);
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            flex-shrink: 0;
+        }
+
+        .bookmark-strip::-webkit-scrollbar {
+            display: none;
+        }
+
+        .bookmark-strip-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            flex-shrink: 0;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .bookmark-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 100px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            cursor: pointer;
+            flex-shrink: 0;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            transition: border-color 0.15s, color 0.15s, background 0.15s;
+        }
+
+        .bookmark-chip:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+            background: var(--bg-surface);
+        }
+
+        .bookmark-chip.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--bg-surface);
+        }
+
+        .bookmark-chip.type-diagram {
+            --chip-color: #a78bfa;
+        }
+
+        .bookmark-chip.type-code {
+            --chip-color: #34d399;
+        }
+
+        .bookmark-chip.active.type-diagram {
+            border-color: #a78bfa;
+            color: #a78bfa;
+        }
+
+        .bookmark-chip.active.type-code {
+            border-color: #34d399;
+            color: #34d399;
+        }
+
         /* ── Bottom input bar ── */
 
         .input-bar {
@@ -473,6 +548,37 @@ export class AssistantView extends LitElement {
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index: this.currentResponseIndex } }));
             this.requestUpdate();
         }
+    }
+
+    navigateToResponse(index) {
+        if (index >= 0 && index < this.responses.length) {
+            this.currentResponseIndex = index;
+            this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index } }));
+            this.requestUpdate();
+        }
+    }
+
+    /**
+     * Scans all responses and returns bookmark metadata for any that contain
+     * a mermaid diagram or a fenced code block.
+     * Returns: Array<{ index, type: 'diagram'|'code', label: string }>
+     */
+    getBookmarks() {
+        const bookmarks = [];
+        let diagramCount = 0;
+        let codeCount = 0;
+        this.responses.forEach((resp, i) => {
+            const hasDiagram = /```mermaid/i.test(resp);
+            const hasCode = !hasDiagram && /```[\w]/i.test(resp);
+            if (hasDiagram) {
+                diagramCount++;
+                bookmarks.push({ index: i, type: 'diagram', label: `Diagram ${diagramCount > 1 ? diagramCount : ''}`.trim() });
+            } else if (hasCode) {
+                codeCount++;
+                bookmarks.push({ index: i, type: 'code', label: `Code ${codeCount > 1 ? codeCount : ''}`.trim() });
+            }
+        });
+        return bookmarks;
     }
 
     scrollResponseUp() {
@@ -777,6 +883,7 @@ export class AssistantView extends LitElement {
         const hasPrev = this.currentResponseIndex > 0;
         const hasNext = this.currentResponseIndex < this.responses.length - 1;
         const showNav = this.responses.length > 0;
+        const bookmarks = this.getBookmarks();
 
         return html`
             <div class="response-container" id="responseContainer"></div>
@@ -794,6 +901,21 @@ export class AssistantView extends LitElement {
                         <polyline points="9 18 15 12 9 6"/>
                     </svg>
                 </button>
+            </div>
+            ` : ''}
+
+            ${bookmarks.length > 0 ? html`
+            <div class="bookmark-strip">
+                <span class="bookmark-strip-label">Jump to:</span>
+                ${bookmarks.map(bm => html`
+                    <button
+                        class="bookmark-chip type-${bm.type} ${this.currentResponseIndex === bm.index ? 'active' : ''}"
+                        @click=${() => this.navigateToResponse(bm.index)}
+                        title="Jump to response ${bm.index + 1}"
+                    >
+                        ${bm.type === 'diagram' ? '📊' : '💻'} ${bm.label}
+                    </button>
+                `)}
             </div>
             ` : ''}
 
