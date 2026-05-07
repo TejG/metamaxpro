@@ -28,6 +28,13 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     });
 
     const { session, desktopCapturer } = require('electron');
+
+    // Allow camera + mic permission requests from the renderer
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        const allowed = ['media', 'camera', 'microphone', 'mediaKeySystem'];
+        callback(allowed.includes(permission));
+    });
+
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
