@@ -168,6 +168,10 @@ export class MainView extends LitElement {
         .form-hint {
             font-size: var(--font-size-xs);
             color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
         .form-hint a, .form-hint span.link {
@@ -178,6 +182,65 @@ export class MainView extends LitElement {
 
         .form-hint span.link:hover {
             text-decoration: underline;
+        }
+
+        /* Key validation status pill */
+        .key-status {
+            display: inline-flex;
+            align-items: center;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 20px;
+            letter-spacing: 0.02em;
+            line-height: 1.6;
+        }
+        .key-status.checking {
+            background: rgba(148,163,184,0.12);
+            color: var(--text-muted);
+        }
+        .key-status.ok {
+            background: rgba(52,211,153,0.12);
+            color: #34d399;
+            border: 1px solid rgba(52,211,153,0.25);
+        }
+        .key-status.error {
+            background: rgba(239,68,68,0.10);
+            color: #f87171;
+            border: 1px solid rgba(239,68,68,0.25);
+        }
+
+        /* Input row with validate button inline */
+        .key-input-row {
+            display: flex;
+            gap: 6px;
+            align-items: stretch;
+        }
+
+        .key-input-row input {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .validate-btn {
+            flex-shrink: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: var(--radius-sm);
+            font-size: 11px;
+            padding: 0 10px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: border-color var(--transition), color var(--transition);
+        }
+        .validate-btn:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+        .validate-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
 
         .whisper-label-row {
@@ -495,6 +558,10 @@ export class MainView extends LitElement {
         _anthropicKey: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
+        // Key validation state — 'idle' | 'checking' | 'ok' | 'error'
+        _geminiStatus: { state: true },
+        _groqStatus: { state: true },
+        _anthropicStatus: { state: true },
         // Local AI state
         _ollamaHost: { state: true },
         _ollamaModel: { state: true },
@@ -519,6 +586,9 @@ export class MainView extends LitElement {
         this._anthropicKey = '';
         this._tokenError = false;
         this._keyError = false;
+        this._geminiStatus = 'idle';
+        this._groqStatus = 'idle';
+        this._anthropicStatus = 'idle';
         this._showLocalHelp = false;
         this._ollamaHost = 'http://127.0.0.1:11434';
         this._ollamaModel = 'llama3.1';
@@ -555,6 +625,11 @@ export class MainView extends LitElement {
             this._whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
 
             this.requestUpdate();
+
+            // Auto-validate any keys already stored
+            if (this._geminiKey) this._validateGemini(this._geminiKey);
+            if (this._groqKey) this._validateGroq(this._groqKey);
+            if (this._anthropicKey) this._validateAnthropic(this._anthropicKey);
         } catch (e) {
             console.error('Error loading MainView storage:', e);
         }
@@ -760,6 +835,77 @@ export class MainView extends LitElement {
         this.onProfileChange(e.target.value);
     }
 
+    // ── Key Validation ──
+
+    async _validateGemini(key) {
+        if (!key || !key.trim()) return;
+        this._geminiStatus = 'checking';
+        this.requestUpdate();
+        try {
+            const res = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models?key=${key.trim()}&pageSize=1`,
+                { signal: AbortSignal.timeout(8000) }
+            );
+            this._geminiStatus = res.ok ? 'ok' : 'error';
+        } catch {
+            this._geminiStatus = 'error';
+        }
+        this.requestUpdate();
+    }
+
+    async _validateGroq(key) {
+        if (!key || !key.trim()) return;
+        this._groqStatus = 'checking';
+        this.requestUpdate();
+        try {
+            const res = await fetch('https://api.groq.com/openai/v1/models', {
+                headers: { Authorization: `Bearer ${key.trim()}` },
+                signal: AbortSignal.timeout(8000),
+            });
+            this._groqStatus = res.ok ? 'ok' : 'error';
+        } catch {
+            this._groqStatus = 'error';
+        }
+        this.requestUpdate();
+    }
+
+    async _validateAnthropic(key) {
+        if (!key || !key.trim()) return;
+        this._anthropicStatus = 'checking';
+        this.requestUpdate();
+        try {
+            // Minimal message request — returns 400 if key is wrong, 200 if key is valid
+            const res = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'x-api-key': key.trim(),
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'claude-haiku-20240307',
+                    max_tokens: 1,
+                    messages: [{ role: 'user', content: 'hi' }],
+                }),
+                signal: AbortSignal.timeout(10000),
+            });
+            // 200 = valid, 401 = invalid key, 400 = invalid request but key accepted
+            this._anthropicStatus = (res.status === 200 || res.status === 400) ? 'ok' : 'error';
+        } catch {
+            this._anthropicStatus = 'error';
+        }
+        this.requestUpdate();
+    }
+
+    // Render a small status pill
+    _renderKeyStatus(status) {
+        if (status === 'idle') return '';
+        if (status === 'checking') return html`<span class="key-status checking">checking…</span>`;
+        if (status === 'ok')      return html`<span class="key-status ok">✓ valid</span>`;
+        if (status === 'error')   return html`<span class="key-status error">✗ invalid</span>`;
+        return '';
+    }
+
     // ── Start ──
 
     _handleStart() {
@@ -883,28 +1029,44 @@ export class MainView extends LitElement {
         return html`
             <div class="form-group">
                 <label class="form-label">Gemini API Key</label>
-                <input
-                    type="password"
-                    placeholder="Required"
-                    .value=${this._geminiKey}
-                    @input=${e => this._saveGeminiKey(e.target.value)}
-                    class=${this._keyError ? 'error' : ''}
-                />
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Required"
+                        .value=${this._geminiKey}
+                        @input=${e => { this._saveGeminiKey(e.target.value); this._geminiStatus = 'idle'; }}
+                        class=${this._keyError ? 'error' : ''}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._geminiKey.trim() || this._geminiStatus === 'checking'}
+                        @click=${() => this._validateGemini(this._geminiKey)}
+                    >Test</button>
+                </div>
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                    ${this._renderKeyStatus(this._geminiStatus)}
                 </div>
             </div>
 
             <div class="form-group">
                 <label class="form-label">Groq API Key</label>
-                <input
-                    type="password"
-                    placeholder="Optional"
-                    .value=${this._groqKey}
-                    @input=${e => this._saveGroqKey(e.target.value)}
-                />
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Optional"
+                        .value=${this._groqKey}
+                        @input=${e => { this._saveGroqKey(e.target.value); this._groqStatus = 'idle'; }}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._groqKey.trim() || this._groqStatus === 'checking'}
+                        @click=${() => this._validateGroq(this._groqKey)}
+                    >Test</button>
+                </div>
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
+                    ${this._renderKeyStatus(this._groqStatus)}
                 </div>
             </div>
 
@@ -995,29 +1157,45 @@ export class MainView extends LitElement {
         return html`
             <div class="form-group">
                 <label class="form-label">Anthropic API Key</label>
-                <input
-                    type="password"
-                    placeholder="Required"
-                    .value=${this._anthropicKey}
-                    @input=${e => this._saveAnthropicKey(e.target.value)}
-                    class=${this._keyError ? 'error' : ''}
-                />
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Required"
+                        .value=${this._anthropicKey}
+                        @input=${e => { this._saveAnthropicKey(e.target.value); this._anthropicStatus = 'idle'; }}
+                        class=${this._keyError ? 'error' : ''}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._anthropicKey.trim() || this._anthropicStatus === 'checking'}
+                        @click=${() => this._validateAnthropic(this._anthropicKey)}
+                    >Test</button>
+                </div>
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://console.anthropic.com/settings/keys')}>Get Anthropic key</span>
+                    ${this._renderKeyStatus(this._anthropicStatus)}
                 </div>
             </div>
 
             <div class="form-group">
                 <label class="form-label">Groq API Key</label>
-                <input
-                    type="password"
-                    placeholder="Required for speech recognition"
-                    .value=${this._groqKey}
-                    @input=${e => this._saveGroqKey(e.target.value)}
-                />
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Required for speech recognition"
+                        .value=${this._groqKey}
+                        @input=${e => { this._saveGroqKey(e.target.value); this._groqStatus = 'idle'; }}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._groqKey.trim() || this._groqStatus === 'checking'}
+                        @click=${() => this._validateGroq(this._groqKey)}
+                    >Test</button>
+                </div>
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
                     &nbsp;— used for Whisper STT
+                    ${this._renderKeyStatus(this._groqStatus)}
                 </div>
             </div>
 
