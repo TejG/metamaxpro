@@ -368,10 +368,10 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 },
                 audio: {
                     sampleRate: SAMPLE_RATE,
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
+                    channelCount: 2,
+                    echoCancellation: false,  // Must be false for loopback/system audio
+                    noiseSuppression: false,  // Must be false for loopback/system audio
+                    autoGainControl: false,   // Must be false for loopback/system audio
                 },
             });
 

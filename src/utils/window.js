@@ -41,7 +41,8 @@ function createWindow(sendToRenderer, geminiSessionRef) {
                 callback({ video: sources[0], audio: 'loopback' });
             });
         },
-        { useSystemPicker: true }
+        // On Windows, useSystemPicker bypasses our loopback audio injection — disable it
+        { useSystemPicker: process.platform !== 'win32' }
     );
 
     mainWindow.setResizable(false);

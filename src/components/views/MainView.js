@@ -874,23 +874,17 @@ export class MainView extends LitElement {
         this._anthropicStatus = 'checking';
         this.requestUpdate();
         try {
-            // Minimal message request — returns 400 if key is wrong, 200 if key is valid
-            const res = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
+            // Use the models list endpoint — GET only, no body, returns 200 for valid key, 401 for invalid
+            const res = await fetch('https://api.anthropic.com/v1/models', {
+                method: 'GET',
                 headers: {
                     'x-api-key': key.trim(),
                     'anthropic-version': '2023-06-01',
-                    'content-type': 'application/json',
                 },
-                body: JSON.stringify({
-                    model: 'claude-haiku-20240307',
-                    max_tokens: 1,
-                    messages: [{ role: 'user', content: 'hi' }],
-                }),
                 signal: AbortSignal.timeout(10000),
             });
-            // 200 = valid, 401 = invalid key, 400 = invalid request but key accepted
-            this._anthropicStatus = (res.status === 200 || res.status === 400) ? 'ok' : 'error';
+            // 200 = valid key, anything else (401/403) = invalid
+            this._anthropicStatus = res.status === 200 ? 'ok' : 'error';
         } catch {
             this._anthropicStatus = 'error';
         }
