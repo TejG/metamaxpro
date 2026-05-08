@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Teleprompter — MetaMax Pro</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.82);
+            -webkit-app-region: drag;
+            user-select: none;
+        }
+
+        /* Close + font controls — no-drag zone */
+        #toolbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            padding: 0 8px;
+            background: rgba(0,0,0,0.4);
+            z-index: 100;
+            -webkit-app-region: drag;
+        }
+
+        .tb-btn {
+            -webkit-app-region: no-drag;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.6);
+            border-radius: 4px;
+            font-size: 10px;
+            padding: 2px 7px;
+            cursor: pointer;
+            line-height: 1.6;
+            transition: background 0.15s, color 0.15s;
+        }
+        .tb-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+        #close-btn {
+            -webkit-app-region: no-drag;
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: #ff5f57;
+            border: none;
+            cursor: pointer;
+            opacity: 0.8;
+            transition: opacity 0.15s;
+            margin-left: 4px;
+        }
+        #close-btn:hover { opacity: 1; }
+
+        #speed-label {
+            color: rgba(255,255,255,0.35);
+            font-size: 9px;
+            font-family: -apple-system, sans-serif;
+            -webkit-app-region: no-drag;
+        }
+
+        /* Scroll container */
+        #scroll-wrap {
+            position: absolute;
+            top: 28px; left: 0; right: 0; bottom: 0;
+            overflow: hidden;
+        }
+
+        #text-inner {
+            padding: 14px 20px 60px;
+            will-change: transform;
+        }
+
+        /* The response text */
+        #response-text {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: var(--tp-size, 17px);
+            line-height: 1.65;
+            color: #f0f0f0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            user-select: none;
+            -webkit-app-region: no-drag;
+        }
+
+        /* Highlight the current sentence */
+        .tp-sentence {
+            transition: color 0.3s, background 0.3s;
+            border-radius: 3px;
+            padding: 0 2px;
+            cursor: default;
+        }
+        .tp-sentence.active {
+            color: #ffffff;
+            background: rgba(52, 211, 153, 0.18);
+        }
+        .tp-sentence.past {
+            color: rgba(255,255,255,0.35);
+        }
+
+        /* Fade edges so it feels like a viewport */
+        #scroll-wrap::before,
+        #scroll-wrap::after {
+            content: '';
+            position: absolute;
+            left: 0; right: 0;
+            height: 36px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        #scroll-wrap::before {
+            top: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.82), transparent);
+        }
+        #scroll-wrap::after {
+            bottom: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.82), transparent);
+        }
+
+        /* Webcam crosshair hint — shows where to look */
+        #cam-hint {
+            position: fixed;
+            top: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: rgba(52,211,153,0.55);
+            font-size: 9px;
+            font-family: -apple-system, sans-serif;
+            pointer-events: none;
+            z-index: 200;
+        }
+        #cam-hint svg { opacity: 0.5; }
+
+        /* Placeholder when no response yet */
+        #placeholder {
+            color: rgba(255,255,255,0.2);
+            font-size: 13px;
+            font-family: -apple-system, sans-serif;
+            text-align: center;
+            padding-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Webcam position hint -->
+    <div id="cam-hint">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        </svg>
+        webcam above ↑ — read here for eye contact
+    </div>
+
+    <div id="toolbar">
+        <span id="speed-label">speed</span>
+        <button class="tb-btn" id="slower-btn">− slower</button>
+        <button class="tb-btn" id="faster-btn">+ faster</button>
+        <button class="tb-btn" id="pause-btn">⏸ pause</button>
+        <button class="tb-btn" id="bigger-btn">A+</button>
+        <button class="tb-btn" id="smaller-btn">A−</button>
+        <button id="close-btn" title="Close"></button>
+    </div>
+
+    <div id="scroll-wrap">
+        <div id="text-inner">
+            <div id="response-text">
+                <div id="placeholder">Waiting for AI response…<br>Ask a question to begin.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        'use strict';
+
+        const { ipcRenderer } = window.require('electron');
+
+        // ── State ────────────────────────────────────────────────
+        let sentences     = [];
+        let activeSentIdx = 0;
+        let scrollY       = 0;
+        let scrollSpeed   = 0.6;   // px per animation frame
+        let paused        = false;
+        let fontSize      = 17;
+        let rafId         = null;
+        let fullText      = '';
+
+        const textEl   = document.getElementById('response-text');
+        const innerEl  = document.getElementById('text-inner');
+        const wrapEl   = document.getElementById('scroll-wrap');
+        const pauseBtn = document.getElementById('pause-btn');
+
+        // ── Controls ─────────────────────────────────────────────
+        document.getElementById('close-btn').addEventListener('click', () => {
+            ipcRenderer.send('close-gaze-window');
+        });
+
+        document.getElementById('pause-btn').addEventListener('click', () => {
+            paused = !paused;
+            pauseBtn.textContent = paused ? '▶ resume' : '⏸ pause';
+            if (!paused) tick();
+        });
+
+        document.getElementById('slower-btn').addEventListener('click', () => {
+            scrollSpeed = Math.max(0.1, scrollSpeed - 0.2);
+        });
+        document.getElementById('faster-btn').addEventListener('click', () => {
+            scrollSpeed = Math.min(4, scrollSpeed + 0.2);
+        });
+
+        document.getElementById('bigger-btn').addEventListener('click', () => {
+            fontSize = Math.min(32, fontSize + 2);
+            document.documentElement.style.setProperty('--tp-size', fontSize + 'px');
+        });
+        document.getElementById('smaller-btn').addEventListener('click', () => {
+            fontSize = Math.max(11, fontSize - 2);
+            document.documentElement.style.setProperty('--tp-size', fontSize + 'px');
+        });
+
+        // Manual scroll override
+        wrapEl.addEventListener('wheel', e => {
+            e.preventDefault();
+            scrollY = Math.max(0, scrollY + e.deltaY * 0.6);
+            innerEl.style.transform = `translateY(${-scrollY}px)`;
+        }, { passive: false });
+
+        // ── Render text into sentence spans ──────────────────────
+        function renderText(text) {
+            if (!text || !text.trim()) {
+                textEl.innerHTML = '<div id="placeholder">Waiting for AI response…<br>Ask a question to begin.</div>';
+                sentences = [];
+                return;
+            }
+
+            // Split on sentence boundaries
+            const raw = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
+            sentences = raw;
+
+            textEl.innerHTML = raw.map((s, i) =>
+                `<span class="tp-sentence${i === 0 ? ' active' : ''}" data-idx="${i}">${s} </span>`
+            ).join('');
+
+            // Reset scroll
+            scrollY = 0;
+            activeSentIdx = 0;
+            innerEl.style.transform = 'translateY(0)';
+        }
+
+        // ── Auto-scroll animation loop ───────────────────────────
+        function tick() {
+            if (paused) return;
+
+            const maxScroll = Math.max(0, innerEl.scrollHeight - wrapEl.clientHeight + 28);
+            if (scrollY < maxScroll) {
+                scrollY += scrollSpeed;
+                innerEl.style.transform = `translateY(${-scrollY}px)`;
+            }
+
+            // Update active sentence based on scroll position
+            updateActiveSentence();
+
+            rafId = requestAnimationFrame(tick);
+        }
+
+        function updateActiveSentence() {
+            const spans = textEl.querySelectorAll('.tp-sentence');
+            if (!spans.length) return;
+
+            // Find which sentence is currently in the visible centre
+            const wrapTop  = wrapEl.getBoundingClientRect().top;
+            const wrapMid  = wrapTop + wrapEl.clientHeight * 0.35; // focus zone — upper third
+
+            let closest = 0;
+            let minDist = Infinity;
+            spans.forEach((sp, i) => {
+                const rect = sp.getBoundingClientRect();
+                const mid  = rect.top + rect.height / 2;
+                const dist = Math.abs(mid - wrapMid);
+                if (dist < minDist) { minDist = dist; closest = i; }
+            });
+
+            if (closest !== activeSentIdx) {
+                activeSentIdx = closest;
+                spans.forEach((sp, i) => {
+                    sp.classList.toggle('active', i === closest);
+                    sp.classList.toggle('past',   i < closest);
+                });
+            }
+        }
+
+        // ── IPC: receive response text from main app ─────────────
+        ipcRenderer.on('teleprompter-update', (event, text) => {
+            fullText = text;
+            renderText(text);
+            // Restart scroll from top
+            scrollY = 0;
+            if (rafId) cancelAnimationFrame(rafId);
+            paused = false;
+            pauseBtn.textContent = '⏸ pause';
+            tick();
+        });
+
+        // ── Start idle scroll loop ────────────────────────────────
+        tick();
+    </script>
+</body>
+</html>

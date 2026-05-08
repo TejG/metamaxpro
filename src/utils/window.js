@@ -306,6 +306,61 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
 }
 
 function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
+    // ── Teleprompter Window ─────────────────────────────────────
+    let teleprompterWindow = null;
+
+    ipcMain.on('open-gaze-window', () => {
+        if (teleprompterWindow && !teleprompterWindow.isDestroyed()) {
+            teleprompterWindow.focus();
+            return;
+        }
+
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width: sw } = primaryDisplay.workAreaSize;
+        const winW = 480;
+        const winH = 160;
+
+        teleprompterWindow = new BrowserWindow({
+            width: winW,
+            height: winH,
+            x: Math.floor((sw - winW) / 2),
+            y: 0,                          // top of screen — right below webcam
+            frame: false,
+            transparent: true,
+            alwaysOnTop: true,
+            resizable: true,
+            hasShadow: false,
+            webPreferences: {
+                nodeIntegration: true,
+                contextIsolation: false,
+            },
+        });
+
+        teleprompterWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        teleprompterWindow.loadFile(path.join(__dirname, '../teleprompter.html'));
+
+        teleprompterWindow.on('closed', () => {
+            teleprompterWindow = null;
+            if (!mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('gaze-window-closed');
+            }
+        });
+    });
+
+    ipcMain.on('close-gaze-window', () => {
+        if (teleprompterWindow && !teleprompterWindow.isDestroyed()) {
+            teleprompterWindow.close();
+        }
+    });
+
+    // Forward the latest AI response text to the teleprompter window
+    ipcMain.on('teleprompter-update', (event, text) => {
+        if (teleprompterWindow && !teleprompterWindow.isDestroyed()) {
+            teleprompterWindow.webContents.send('teleprompter-update', text);
+        }
+    });
+
+    // ── View / layout changes ───────────────────────────────────
     ipcMain.on('view-changed', (event, view) => {
         if (!mainWindow.isDestroyed()) {
             const primaryDisplay = screen.getPrimaryDisplay();

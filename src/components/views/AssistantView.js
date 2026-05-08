@@ -305,75 +305,9 @@ export class AssistantView extends LitElement {
             color: #34d399;
         }
 
-        /* ── Camera PiP ── */
+        /* ── Gaze correction button ── */
 
-        .camera-pip {
-            position: fixed;
-            bottom: 80px;
-            right: 16px;
-            width: 120px;
-            height: 90px;
-            border-radius: 10px;
-            overflow: hidden;
-            border: 2px solid var(--border);
-            background: #000;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            z-index: 9999;
-            transition: opacity 0.2s, transform 0.2s;
-            cursor: grab;
-        }
-
-        .camera-pip:active {
-            cursor: grabbing;
-        }
-
-        .camera-pip video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transform: scaleX(-1); /* mirror */
-            display: block;
-        }
-
-        .camera-pip-off-label {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            color: var(--text-muted);
-            background: var(--bg-surface);
-            text-align: center;
-            padding: 8px;
-            line-height: 1.4;
-        }
-
-        .camera-pip-close {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            background: rgba(0,0,0,0.6);
-            border: none;
-            color: #fff;
-            font-size: 10px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.15s;
-            z-index: 1;
-        }
-
-        .camera-pip:hover .camera-pip-close {
-            opacity: 1;
-        }
-
-        .camera-toggle-btn {
+        .gaze-btn {
             background: var(--bg-elevated);
             border: 1px solid var(--border);
             color: var(--text-muted);
@@ -388,15 +322,16 @@ export class AssistantView extends LitElement {
             transition: border-color var(--transition), color var(--transition), background var(--transition);
         }
 
-        .camera-toggle-btn:hover {
+        .gaze-btn:hover {
             border-color: var(--accent);
             color: var(--text-primary);
             background: var(--bg-surface);
         }
 
-        .camera-toggle-btn.active {
+        .gaze-btn.active {
             border-color: #34d399;
             color: #34d399;
+            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
         }
 
         /* ── Bottom input bar ── */
@@ -544,7 +479,7 @@ export class AssistantView extends LitElement {
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
         capturedCount: { type: Number, state: true },
-        cameraOn: { type: Boolean, state: true },
+        gazeWindowOpen: { type: Boolean, state: true },
     };
 
     constructor() {
@@ -555,10 +490,8 @@ export class AssistantView extends LitElement {
         this.onSendText = () => {};
         this.isAnalyzing = false;
         this.capturedCount = 0;
-        this.cameraOn = false;
-        this._cameraStream = null;
+        this.gazeWindowOpen = false;
         this._animFrame = null;
-        this._pipDragging = false;
     }
 
     getProfileNames() {
@@ -713,78 +646,24 @@ export class AssistantView extends LitElement {
         }
     }
 
-    async toggleCamera() {
-        if (this.cameraOn) {
-            this._stopCamera();
+    toggleGazeWindow() {
+        if (!window.require) return;
+        const { ipcRenderer } = window.require('electron');
+        if (this.gazeWindowOpen) {
+            ipcRenderer.send('close-gaze-window');
+            this.gazeWindowOpen = false;
         } else {
-            await this._startCamera();
-        }
-    }
-
-    async _startCamera() {
-        try {
-            this._cameraStream = await navigator.mediaDevices.getUserMedia({
-                video: { width: 240, height: 180, facingMode: 'user' },
-                audio: false,
+            ipcRenderer.send('open-gaze-window');
+            this.gazeWindowOpen = true;
+            // Listen for the window being closed by its own X button
+            ipcRenderer.once('gaze-window-closed', () => {
+                this.gazeWindowOpen = false;
             });
-            this.cameraOn = true;
-            await this.updateComplete;
-            const video = this.shadowRoot.querySelector('.pip-video');
-            if (video) {
-                video.srcObject = this._cameraStream;
-                video.play();
-            }
-            this._setupPipDrag();
-        } catch (err) {
-            console.error('Camera access denied or unavailable:', err);
-            this.cameraOn = false;
         }
-    }
-
-    _stopCamera() {
-        if (this._cameraStream) {
-            this._cameraStream.getTracks().forEach(t => t.stop());
-            this._cameraStream = null;
-        }
-        this.cameraOn = false;
-    }
-
-    _setupPipDrag() {
-        const pip = this.shadowRoot.querySelector('.camera-pip');
-        if (!pip) return;
-        let startX, startY, startRight, startBottom;
-
-        pip.addEventListener('mousedown', e => {
-            if (e.target.classList.contains('camera-pip-close')) return;
-            this._pipDragging = true;
-            startX = e.clientX;
-            startY = e.clientY;
-            const rect = pip.getBoundingClientRect();
-            startRight = window.innerWidth - rect.right;
-            startBottom = window.innerHeight - rect.bottom;
-
-            const onMove = mv => {
-                if (!this._pipDragging) return;
-                const dx = mv.clientX - startX;
-                const dy = mv.clientY - startY;
-                pip.style.right = Math.max(8, startRight - dx) + 'px';
-                pip.style.bottom = Math.max(8, startBottom - dy) + 'px';
-                pip.style.left = 'auto';
-                pip.style.top = 'auto';
-            };
-            const onUp = () => {
-                this._pipDragging = false;
-                window.removeEventListener('mousemove', onMove);
-                window.removeEventListener('mouseup', onUp);
-            };
-            window.addEventListener('mousemove', onMove);
-            window.addEventListener('mouseup', onUp);
-        });
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        this._stopCamera();
         this._stopWaveformAnimation();
 
         if (window.require) {
@@ -1010,6 +889,23 @@ export class AssistantView extends LitElement {
             const currentResponse = this.getCurrentResponse();
             const renderedResponse = this.renderMarkdown(currentResponse);
             container.innerHTML = renderedResponse;
+
+            // Push plain text to teleprompter window if open
+            if (this.gazeWindowOpen && currentResponse && window.require) {
+                const { ipcRenderer } = window.require('electron');
+                // Strip markdown so teleprompter shows clean readable text
+                const plainText = currentResponse
+                    .replace(/```[\s\S]*?```/g, '')       // remove code blocks
+                    .replace(/`[^`]+`/g, '')              // inline code
+                    .replace(/#{1,6}\s+/g, '')            // headings
+                    .replace(/\*\*(.+?)\*\*/g, '$1')      // bold
+                    .replace(/\*(.+?)\*/g, '$1')          // italic
+                    .replace(/\[(.+?)\]\(.+?\)/g, '$1')   // links
+                    .replace(/^\s*[-*+]\s+/gm, '')        // bullet points
+                    .replace(/^\s*\d+\.\s+/gm, '')        // numbered lists
+                    .trim();
+                ipcRenderer.send('teleprompter-update', plainText);
+            }
             // Debounce mermaid rendering — updateResponseContent fires on every streaming chunk,
             // so we wait until streaming settles before rendering diagrams
             if (typeof window !== 'undefined' && window.mermaid && container.querySelector('.mermaid')) {
@@ -1087,13 +983,6 @@ export class AssistantView extends LitElement {
             </div>
             ` : ''}
 
-            ${this.cameraOn ? html`
-            <div class="camera-pip">
-                <video class="pip-video" autoplay muted playsinline></video>
-                <div class="camera-pip-off-label">Camera</div>
-                <button class="camera-pip-close" @click=${() => this._stopCamera()} title="Close camera">✕</button>
-            </div>` : ''}
-
             <div class="input-bar">
                 <div class="input-bar-inner">
                     <input
@@ -1104,13 +993,13 @@ export class AssistantView extends LitElement {
                     />
                 </div>
                 <button
-                    class="camera-toggle-btn ${this.cameraOn ? 'active' : ''}"
-                    @click=${this.toggleCamera}
-                    title="${this.cameraOn ? 'Hide camera' : 'Show camera (eye contact)'}"
+                    class="gaze-btn ${this.gazeWindowOpen ? 'active' : ''}"
+                    @click=${this.toggleGazeWindow}
+                    title="${this.gazeWindowOpen ? 'Close eye-contact window' : 'Open eye-contact correction'}"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M23 7l-7 5 7 5V7z"/>
-                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
                     </svg>
                 </button>
                 <button
