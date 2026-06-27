@@ -11,8 +11,15 @@ let onTurnComplete = null;
 
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
-    if (windows.length > 0) {
-        windows[0].webContents.send(channel, data);
+    const target = BrowserWindow.getFocusedWindow() || windows.find(w => w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) || windows[0];
+    if (target && target.webContents && !target.webContents.isDestroyed()) {
+        try {
+            target.webContents.send(channel, data);
+        } catch (e) {
+            console.error('[Cloud] sendToRenderer failed for channel', channel, e);
+        }
+    } else {
+        console.warn('[Cloud] No renderer window available to send IPC:', channel);
     }
 }
 

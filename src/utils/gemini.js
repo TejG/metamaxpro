@@ -104,8 +104,16 @@ const RECONNECT_DELAY = 2000;
 
 function sendToRenderer(channel, data) {
     const windows = BrowserWindow.getAllWindows();
-    if (windows.length > 0) {
-        windows[0].webContents.send(channel, data);
+    // Prefer the focused window, fall back to the first non-destroyed window, then index 0
+    const target = BrowserWindow.getFocusedWindow() || windows.find(w => w && !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()) || windows[0];
+    if (target && target.webContents && !target.webContents.isDestroyed()) {
+        try {
+            target.webContents.send(channel, data);
+        } catch (e) {
+            console.error('sendToRenderer failed for channel', channel, e);
+        }
+    } else {
+        console.warn('No renderer window available to send IPC:', channel);
     }
 }
 

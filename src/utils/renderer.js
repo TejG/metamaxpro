@@ -826,6 +826,17 @@ ipcRenderer.on('save-conversation-turn', async (event, data) => {
     }
 });
 
+// Debug: log incoming AI IPC messages to help trace UI update issues
+ipcRenderer.on('new-response', (_event, payload) => {
+    console.log('[IPC DEBUG] new-response received:', payload ? (payload.length ? payload.substring(0, 120) : payload) : payload);
+});
+ipcRenderer.on('update-response', (_event, payload) => {
+    console.log('[IPC DEBUG] update-response received:', payload ? (payload.length ? payload.substring(0, 120) : payload) : payload);
+});
+ipcRenderer.on('update-status', (_event, payload) => {
+    console.log('[IPC DEBUG] update-status received:', payload);
+});
+
 // Listen for session context (profile info) when session starts
 ipcRenderer.on('save-session-context', async (event, data) => {
     try {
