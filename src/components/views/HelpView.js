@@ -159,14 +159,6 @@ export class HelpView extends LitElement {
             <div class="unified-page">
                 <div class="unified-wrap">
                     <div class="page-title">Help</div>
-
-                    <section class="surface">
-                        <div class="surface-title">Support</div>
-                        <div class="link-row">
-                            <button class="link-button" @click=${() => this._open('https://discord.gg/GCBdubnXfJ')}>Discord</button>
-                        </div>
-                    </section>
-
                     <section class="surface">
                         <div class="surface-title">Keyboard Shortcuts</div>
                         <div class="shortcut-grid">
