@@ -40,8 +40,9 @@ jobs:
 
       - name: Create release (if missing)
         uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ steps.determine.outputs.tag }}
           release_name: ${{ steps.determine.outputs.tag }}
           body: "Automated release for ${{ steps.determine.outputs.tag }}"
