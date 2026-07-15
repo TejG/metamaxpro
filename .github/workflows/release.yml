@@ -15,11 +15,10 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # Helper: determine tag name for this run (v{pkg.version} for main pushes, tag ref for tag pushes)
-  # Each build job computes TAG and, when the event is a push to main, creates a GitHub Release with that tag.
-
-  build-mac-arm64:
-    runs-on: macos-latest
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.determine.outputs.tag }}
     if: "startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'"
     steps:
       - uses: actions/checkout@v4
@@ -29,25 +28,31 @@ jobs:
           cache: 'npm'
 
       - name: Determine tag name
-        id: tag
+        id: determine
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
           else
-            TAG_NAME="v$(node -p "require('./package.json').version")"
+            TAG_NAME="v$(node -p \"require('./package.json').version\")"
           fi
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
-      - name: Create release (for pushes to main or tags)
-        if: "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')"
+      - name: Create release (if missing)
         uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          release_name: ${{ steps.tag.outputs.tag }}
-          body: "Automated release for ${{ steps.tag.outputs.tag }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ steps.determine.outputs.tag }}
+          release_name: ${{ steps.determine.outputs.tag }}
+          body: "Automated release for ${{ steps.determine.outputs.tag }}"
+  build-mac-arm64:
+    runs-on: macos-latest
+    needs: prepare-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -57,41 +62,21 @@ jobs:
 
       - name: Upload macOS arm64 artifacts to release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
           files: out/make/**/*.dmg
 
-  # macOS x64 (Intel)
   build-mac-x64:
     runs-on: macos-13
-    if: "startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'"
+    needs: prepare-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-
-      - name: Determine tag name
-        id: tag
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          else
-            TAG_NAME="v$(node -p "require('./package.json').version")"
-          fi
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-
-      - name: Create release (for pushes to main)
-        if: github.ref == 'refs/heads/main'
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          release_name: ${{ steps.tag.outputs.tag }}
-          body: "Automated release for ${{ steps.tag.outputs.tag }}"
 
       - name: Install dependencies
         run: npm ci
@@ -101,42 +86,21 @@ jobs:
 
       - name: Upload macOS x64 artifacts to release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
           files: out/make/**/*.dmg
 
-  # Windows x64
   build-windows:
     runs-on: windows-latest
-    if: "startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'"
+    needs: prepare-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-
-      - name: Determine tag name
-        id: tag
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          else
-            TAG_NAME="v$(node -p "require('./package.json').version")"
-          fi
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-
-      - name: Create release (for pushes to main)
-        if: github.ref == 'refs/heads/main'
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          release_name: ${{ steps.tag.outputs.tag }}
-          body: "Automated release for ${{ steps.tag.outputs.tag }}"
 
       - name: Install dependencies
         run: npm ci
@@ -146,8 +110,10 @@ jobs:
 
       - name: Upload Windows x64 artifacts to release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
           files: |
             out/make/squirrel.windows/**/*.exe
             out/make/**/*.msi
