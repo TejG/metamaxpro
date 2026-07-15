@@ -29,11 +29,12 @@ jobs:
 
       - name: Determine tag name
         id: determine
+        shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG_NAME="${GITHUB_REF#refs/tags/}"
           else
-            TAG_NAME="v$(node -p \"require('./package.json').version\")"
+            TAG_NAME="v$(node -p 'require("./package.json").version')"
           fi
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
