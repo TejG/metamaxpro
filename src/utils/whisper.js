@@ -1,7 +1,8 @@
 const { getGroqApiKey } = require('../storage');
 
 // Voice Activity Detection parameters
-const SPEECH_RMS_THRESHOLD = 3000;   // Higher threshold to ignore breathing/mic noise
+// Lowered default RMS threshold to better detect system audio levels.
+const SPEECH_RMS_THRESHOLD = 800;   // Was 3000 — lowered to detect quieter system audio
 const SILENCE_DURATION_MS = 1800;   // Increased to 1.8 seconds to allow for natural mid-sentence pauses
 const MIN_SPEECH_DURATION_MS = 250; // Quicker response for short utterances
 const MAX_BUFFER_DURATION_MS = 45000; // Trigger STT forcefully if they talk for >45s
@@ -125,9 +126,14 @@ function processAudioChunk(monoChunk) {
         noiseFloor = (noiseFloor * 0.8) + (rms * 0.2);
     }
     
-    // Dynamic threshold: at least SPEECH_RMS_THRESHOLD, but dynamically scales 
-    // above ambient room noise (e.g. static/humming).
-    const dynamicThreshold = Math.max(SPEECH_RMS_THRESHOLD, noiseFloor * 2.5);
+    // Dynamic threshold: at least SPEECH_RMS_THRESHOLD, but dynamically scales
+    // above ambient room noise (e.g. static/humming). Use a milder multiplier
+    // so quieter system audio isn't accidentally treated as silence.
+    const dynamicThreshold = Math.max(SPEECH_RMS_THRESHOLD, noiseFloor * 1.8);
+
+    if (process.env.DEBUG_AUDIO) {
+        console.log(`[Whisper VAD DEBUG] RMS: ${rms.toFixed(0)}, noiseFloor: ${noiseFloor.toFixed(0)}, dynamicThreshold: ${dynamicThreshold.toFixed(0)}`);
+    }
 
     if (rms > dynamicThreshold) {
         if (!isSpeaking) {

@@ -111,6 +111,8 @@ function getDefaultKeybinds() {
         toggleVisibility: isMac ? 'Cmd+\\' : 'Ctrl+\\',
         toggleClickThrough: isMac ? 'Cmd+M' : 'Ctrl+M',
         nextStep: isMac ? 'Cmd+Enter' : 'Ctrl+Enter',
+    capture: isMac ? 'Cmd+Shift+C' : 'Ctrl+Shift+C',
+    solve: isMac ? 'Cmd+Shift+S' : 'Ctrl+Shift+S',
         previousResponse: isMac ? 'Cmd+[' : 'Ctrl+[',
         nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
@@ -223,6 +225,43 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
             console.log(`Registered nextStep: ${keybinds.nextStep}`);
         } catch (error) {
             console.error(`Failed to register nextStep (${keybinds.nextStep}):`, error);
+        }
+    }
+
+    // Register capture shortcut
+    if (keybinds.capture) {
+        try {
+            globalShortcut.register(keybinds.capture, async () => {
+                console.log('Capture shortcut triggered');
+                try {
+                    const isMac = process.platform === 'darwin';
+                    const shortcutKey = 'c';
+                    mainWindow.webContents.executeJavaScript(`metaMaxPro.handleShortcut('${shortcutKey}');`);
+                } catch (error) {
+                    console.error('Error handling capture shortcut:', error);
+                }
+            });
+            console.log(`Registered capture: ${keybinds.capture}`);
+        } catch (error) {
+            console.error(`Failed to register capture (${keybinds.capture}):`, error);
+        }
+    }
+
+    // Register solve shortcut
+    if (keybinds.solve) {
+        try {
+            globalShortcut.register(keybinds.solve, async () => {
+                console.log('Solve shortcut triggered');
+                try {
+                    const shortcutKey = 's';
+                    mainWindow.webContents.executeJavaScript(`metaMaxPro.handleShortcut('${shortcutKey}');`);
+                } catch (error) {
+                    console.error('Error handling solve shortcut:', error);
+                }
+            });
+            console.log(`Registered solve: ${keybinds.solve}`);
+        } catch (error) {
+            console.error(`Failed to register solve (${keybinds.solve}):`, error);
         }
     }
 

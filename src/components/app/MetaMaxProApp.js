@@ -310,6 +310,35 @@ export class MetaMaxProApp extends LitElement {
             overflow-x: hidden;
         }
 
+        /* Simple page header with back button for non-main views */
+        .page-back-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: var(--space-md);
+            margin-top: 12px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-surface);
+        }
+
+        .back-to-main {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 6px 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-to-main:hover {
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+            background: var(--bg-hover);
+        }
+
         .content-inner.live {
             overflow: hidden;
             display: flex;
@@ -341,6 +370,47 @@ export class MetaMaxProApp extends LitElement {
         ::-webkit-scrollbar-thumb:hover {
             background: #444444;
         }
+
+        /* Bottom navigation (replaces left sidebar) */
+        .bottom-nav {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 14px;
+            display: flex;
+            justify-content: center;
+            pointer-events: auto;
+            z-index: 9998;
+        }
+
+        .bottom-nav.hidden {
+            display: none;
+        }
+
+        .bottom-nav-inner {
+            display: flex;
+            gap: var(--space-lg);
+            padding: 10px 16px;
+            border-radius: 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+            align-items: center;
+        }
+
+        .bottom-nav .nav-item {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            background: transparent;
+        }
+
+        .bottom-nav .nav-item svg { width: 18px; height: 18px; }
+
     `;
 
     static properties = {
@@ -491,8 +561,16 @@ export class MetaMaxProApp extends LitElement {
     }
 
     addNewResponse(response) {
+        // Annotate response for color-coded corrections when applicable
+        const annotated = this._annotateResponse(response);
+        try {
+            console.log('[IPC DEBUG] addNewResponse called. preview:', typeof response === 'string' ? (response.length > 120 ? response.substring(0,120) + '…' : response) : response);
+            console.log('[IPC DEBUG] responses length before add:', this.responses.length, 'currentResponseIndex:', this.currentResponseIndex);
+        } catch (e) {
+            // ignore logging failures
+        }
         const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
-        this.responses = [...this.responses, response];
+        this.responses = [...this.responses, annotated];
         if (wasOnLatest || this.currentResponseIndex === -1) {
             this.currentResponseIndex = this.responses.length - 1;
         }
@@ -501,12 +579,59 @@ export class MetaMaxProApp extends LitElement {
     }
 
     updateCurrentResponse(response) {
+        const annotated = this._annotateResponse(response);
+        try {
+            console.log('[IPC DEBUG] updateCurrentResponse called. preview:', typeof response === 'string' ? (response.length > 120 ? response.substring(0,120) + '…' : response) : response);
+            console.log('[IPC DEBUG] currentResponseIndex before update:', this.currentResponseIndex, 'responses length:', this.responses.length);
+        } catch (e) {
+            // ignore logging failures
+        }
         if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), response];
+            this.responses = [...this.responses.slice(0, -1), annotated];
         } else {
             this.addNewResponse(response);
+            return;
         }
         this.requestUpdate();
+    }
+
+    /**
+     * Annotate response text to apply color classes for code, comments, and corrections.
+     * Heuristics:
+     * - For fenced code blocks (```), wrap each code line in spans and mark lines starting with + or - as additions/deletions.
+     * - Lines starting with common comment tokens are given comment-line class.
+     */
+    _annotateResponse(raw) {
+        if (!raw || typeof raw !== 'string') return raw;
+
+        // Quick failure heuristic: annotate when response contains 'Error' or 'failed' or shows diff markers
+        const needsAnnotate = /(^Error:)|\bfailed\b|\bcorrection\b|^[+-]/im.test(raw);
+        if (!needsAnnotate && !/```/.test(raw)) return raw;
+
+        // Process fenced code blocks
+        return raw.replace(/```(\w*\n)?([\s\S]*?)```/g, (m, langLine, code) => {
+            const lang = (langLine || '').trim().replace(/\n$/, '').replace(/^\s*/, '');
+            const lines = code.split('\n');
+            const transformed = lines.map(line => {
+                if (/^\+\s*/.test(line)) {
+                    return `<div class="correction addition">${this._escapeHtml(line)}</div>`;
+                }
+                if (/^-\s*/.test(line)) {
+                    return `<div class="correction deletion">${this._escapeHtml(line)}</div>`;
+                }
+                if (/^\s*(\/\/|#|\/\*|\*)/.test(line)) {
+                    return `<div class="comment-line">${this._escapeHtml(line)}</div>`;
+                }
+                return `<div class="code-line">${this._escapeHtml(line)}</div>`;
+            }).join('\n');
+
+            // Rebuild as HTML-wrapped code block — keep language hint for tooling
+            return `<pre><code class="language-${lang}">${transformed}</code></pre>`;
+        });
+    }
+
+    _escapeHtml(text) {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     // ── Navigation ──
@@ -554,62 +679,74 @@ export class MetaMaxProApp extends LitElement {
         const prefs = await metaMaxPro.storage.getPreferences();
         const providerMode = prefs.providerMode || 'cloud';
 
-        if (providerMode === 'cloud') {
-            const creds = await metaMaxPro.storage.getCredentials();
-            if (!creds.cloudToken || creds.cloudToken.trim() === '') {
-                const mainView = this.shadowRoot.querySelector('main-view');
-                if (mainView && mainView.triggerApiKeyError) {
-                    mainView.triggerApiKeyError();
+        const startSession = () => {
+            metaMaxPro.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
+            this.responses = [];
+            this.currentResponseIndex = -1;
+            this.startTime = Date.now();
+            this.sessionActive = true;
+            this.currentView = 'assistant';
+            this._startTimer();
+        };
+
+        // Try Anthropic first when running in 'auto' or 'cloud' preference and a key exists
+        try {
+            if (providerMode === 'auto' || providerMode === 'cloud') {
+                const anthropicKey = await metaMaxPro.storage.getAnthropicApiKey().catch(() => '');
+                if (anthropicKey && anthropicKey.trim() !== '') {
+                    const ok = await metaMaxPro.initializeAnthropic(this.selectedProfile);
+                    if (ok) { startSession(); return; }
                 }
-                return;
             }
 
-            const success = await metaMaxPro.initializeCloud(this.selectedProfile);
-            if (!success) {
-                const mainView = this.shadowRoot.querySelector('main-view');
-                if (mainView && mainView.triggerApiKeyError) {
-                    mainView.triggerApiKeyError();
+            // Provider-specific flows
+            if (providerMode === 'cloud') {
+                const creds = await metaMaxPro.storage.getCredentials();
+                if (!creds.cloudToken || creds.cloudToken.trim() === '') {
+                    const mainView = this.shadowRoot.querySelector('main-view');
+                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                    return;
                 }
-                return;
-            }
-        } else if (providerMode === 'local') {
-            const success = await metaMaxPro.initializeLocal(this.selectedProfile);
-            if (!success) {
-                const mainView = this.shadowRoot.querySelector('main-view');
-                if (mainView && mainView.triggerApiKeyError) {
-                    mainView.triggerApiKeyError();
+
+                const success = await metaMaxPro.initializeCloud(this.selectedProfile);
+                if (!success) {
+                    const mainView = this.shadowRoot.querySelector('main-view');
+                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                    return;
                 }
-                return;
-            }
-        } else if (providerMode === 'anthropic') {
-            const success = await metaMaxPro.initializeAnthropic(this.selectedProfile);
-            if (!success) {
-                const mainView = this.shadowRoot.querySelector('main-view');
-                if (mainView && mainView.triggerApiKeyError) {
-                    mainView.triggerApiKeyError();
+            } else if (providerMode === 'local') {
+                const success = await metaMaxPro.initializeLocal(this.selectedProfile);
+                if (!success) {
+                    const mainView = this.shadowRoot.querySelector('main-view');
+                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                    return;
                 }
-                return;
-            }
-        } else {
-            const apiKey = await metaMaxPro.storage.getApiKey();
-            if (!apiKey || apiKey === '') {
-                const mainView = this.shadowRoot.querySelector('main-view');
-                if (mainView && mainView.triggerApiKeyError) {
-                    mainView.triggerApiKeyError();
+            } else if (providerMode === 'anthropic') {
+                const success = await metaMaxPro.initializeAnthropic(this.selectedProfile);
+                if (!success) {
+                    const mainView = this.shadowRoot.querySelector('main-view');
+                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                    return;
                 }
-                return;
+            } else {
+                const apiKey = await metaMaxPro.storage.getApiKey();
+                if (!apiKey || apiKey === '') {
+                    const mainView = this.shadowRoot.querySelector('main-view');
+                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+                    return;
+                }
+
+                await metaMaxPro.initializeGemini(this.selectedProfile, this.selectedLanguage);
             }
 
-            await metaMaxPro.initializeGemini(this.selectedProfile, this.selectedLanguage);
+            // If we reach here initialization succeeded for non-Anthropic path
+            startSession();
+        } catch (err) {
+            console.error('Error during handleStart:', err);
+            const mainView = this.shadowRoot.querySelector('main-view');
+            if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
+            return;
         }
-
-        metaMaxPro.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
-        this.responses = [];
-        this.currentResponseIndex = -1;
-        this.startTime = Date.now();
-        this.sessionActive = true;
-        this.currentView = 'assistant';
-        this._startTimer();
     }
 
     async handleAPIKeyHelp() {
@@ -718,6 +855,7 @@ export class MetaMaxProApp extends LitElement {
                     <main-view
                         .selectedProfile=${this.selectedProfile}
                         .onProfileChange=${p => this.handleProfileChange(p)}
+                        .onNavigate=${v => this.navigate(v)}
                         .onStart=${() => this.handleStart()}
                         .onExternalLink=${url => this.handleExternalLinkClick(url)}
                         .whisperDownloading=${this._whisperDownloading}
@@ -726,36 +864,72 @@ export class MetaMaxProApp extends LitElement {
 
             case 'ai-customize':
                 return html`
-                    <ai-customize-view
-                        .selectedProfile=${this.selectedProfile}
-                        .onProfileChange=${p => this.handleProfileChange(p)}
-                    ></ai-customize-view>
+                    <div>
+                        <div class="page-back-header">
+                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
+                            <div class="page-title">AI Customization</div>
+                        </div>
+                        <ai-customize-view
+                            .selectedProfile=${this.selectedProfile}
+                            .onProfileChange=${p => this.handleProfileChange(p)}
+                        ></ai-customize-view>
+                    </div>
                 `;
 
             case 'customize':
                 return html`
-                    <customize-view
-                        .selectedProfile=${this.selectedProfile}
-                        .selectedLanguage=${this.selectedLanguage}
-                        .selectedScreenshotInterval=${this.selectedScreenshotInterval}
-                        .selectedImageQuality=${this.selectedImageQuality}
-                        .layoutMode=${this.layoutMode}
-                        .onProfileChange=${p => this.handleProfileChange(p)}
-                        .onLanguageChange=${l => this.handleLanguageChange(l)}
-                        .onScreenshotIntervalChange=${i => this.handleScreenshotIntervalChange(i)}
-                        .onImageQualityChange=${q => this.handleImageQualityChange(q)}
-                        .onLayoutModeChange=${lm => this.handleLayoutModeChange(lm)}
-                    ></customize-view>
+                    <div>
+                        <div class="page-back-header">
+                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
+                            <div class="page-title">Settings</div>
+                        </div>
+                        <customize-view
+                            .selectedProfile=${this.selectedProfile}
+                            .selectedLanguage=${this.selectedLanguage}
+                            .selectedScreenshotInterval=${this.selectedScreenshotInterval}
+                            .selectedImageQuality=${this.selectedImageQuality}
+                            .layoutMode=${this.layoutMode}
+                            .onProfileChange=${p => this.handleProfileChange(p)}
+                            .onLanguageChange=${l => this.handleLanguageChange(l)}
+                            .onScreenshotIntervalChange=${i => this.handleScreenshotIntervalChange(i)}
+                            .onImageQualityChange=${q => this.handleImageQualityChange(q)}
+                            .onLayoutModeChange=${lm => this.handleLayoutModeChange(lm)}
+                        ></customize-view>
+                    </div>
                 `;
 
             case 'feedback':
-                return html`<feedback-view></feedback-view>`;
+                return html`
+                    <div>
+                        <div class="page-back-header">
+                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
+                            <div class="page-title">Feedback</div>
+                        </div>
+                        <feedback-view></feedback-view>
+                    </div>
+                `;
 
             case 'help':
-                return html`<help-view .onExternalLinkClick=${url => this.handleExternalLinkClick(url)}></help-view>`;
+                return html`
+                    <div>
+                        <div class="page-back-header">
+                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
+                            <div class="page-title">Help</div>
+                        </div>
+                        <help-view .onExternalLinkClick=${url => this.handleExternalLinkClick(url)}></help-view>
+                    </div>
+                `;
 
             case 'history':
-                return html`<history-view></history-view>`;
+                return html`
+                    <div>
+                        <div class="page-back-header">
+                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
+                            <div class="page-title">History</div>
+                        </div>
+                        <history-view></history-view>
+                    </div>
+                `;
 
             case 'assistant':
                 return html`
@@ -763,6 +937,7 @@ export class MetaMaxProApp extends LitElement {
                         .responses=${this.responses}
                         .currentResponseIndex=${this.currentResponseIndex}
                         .selectedProfile=${this.selectedProfile}
+                        .sessionActive=${this.sessionActive}
                         .onSendText=${msg => this.handleSendText(msg)}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
                         @response-index-changed=${this.handleResponseIndexChanged}
@@ -789,12 +964,13 @@ export class MetaMaxProApp extends LitElement {
             { id: 'help', label: 'Help', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01"/><path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483"/></g></svg>` },
         ];
 
+    // When on the main view, MainView renders its own nav and controls.
+    // Avoid duplicating the navigation here.
+    if (this.currentView === 'main') return '';
+
         return html`
-            <div class="sidebar ${this._isLiveMode() ? 'hidden' : ''}">
-                <div class="sidebar-brand">
-                    <h1>Meta Booster Pro</h1>
-                </div>
-                <nav class="sidebar-nav">
+            <div class="bottom-nav ${this._isLiveMode() ? 'hidden' : ''}">
+                <div class="bottom-nav-inner">
                     ${items.map(item => html`
                         <button
                             class="nav-item ${this.currentView === item.id ? 'active' : ''}"
@@ -802,19 +978,9 @@ export class MetaMaxProApp extends LitElement {
                             title=${item.label}
                         >
                             ${item.icon}
-                            ${item.label}
+                            <div style="font-size:12px;">${item.label}</div>
                         </button>
                     `)}
-                </nav>
-                <div class="sidebar-footer">
-                    ${this._updateAvailable ? html`
-                        <button class="update-btn">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5l5-5m-5-7v12" /></svg>
-                            Update available
-                        </button>
-                    ` : html`
-                        <div class="version-text">v${this._localVersion}</div>
-                    `}
                 </div>
             </div>
         `;
@@ -825,11 +991,16 @@ export class MetaMaxProApp extends LitElement {
 
         const profileLabels = {
             interview: 'Interview',
+            behavioral: 'Behavioral Interview',
+            coding: 'Coding Interview',
+            system_design: 'System Design',
+            case: 'Case Interview',
             sales: 'Sales Call',
             meeting: 'Meeting',
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam',
+            assistant: 'Assistant',
         };
 
         return html`
@@ -876,7 +1047,6 @@ export class MetaMaxProApp extends LitElement {
                     </div>
                     <div class="drag-region"></div>
                 </div>
-                ${this.renderSidebar()}
                 <div class="content">
                     ${isLive ? this.renderLiveBar() : ''}
                     <div class="content-inner ${isLive ? 'live' : ''}">

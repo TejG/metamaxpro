@@ -15,15 +15,26 @@ export class MainView extends LitElement {
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: var(--space-xl) var(--space-lg);
+            padding: 28px 24px;
         }
 
         .form-wrapper {
             width: 100%;
-            max-width: 420px;
+            max-width: 820px;
             display: flex;
             flex-direction: column;
             gap: var(--space-md);
+            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+            border-radius: 20px;
+            padding: 12px 14px 8px 14px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+            -webkit-app-region: no-drag;
+        }
+
+        .top-section {
+            display: block;
+            padding: 8px 6px 12px 6px;
+            transition: max-height 200ms ease, padding 160ms ease;
         }
 
         .page-title {
@@ -360,6 +371,28 @@ export class MainView extends LitElement {
             gap: var(--space-lg);
         }
 
+        /* Make a shrink-wrapping container so the select determines width
+           and the Start button can match that width. */
+        .mode-control-wrap {
+            display: inline-flex;
+            flex-direction: row;
+            gap: 12px; /* larger, visible gap between select and button */
+            max-width: auto; /* container shrinks to content */
+            align-items: stretch; /* children with width:100% fill container */
+        }
+
+        .mode-control-wrap select {
+            width: auto !important; /* override global width:100% */
+            display: block;
+            width: auto;
+            box-sizing: border-box;
+        }
+
+        .mode-control-wrap .start-button {
+            width: 100%; /* match the container (and the select) */
+            margin-top: 0; /* ensure no negative spacing */
+        }
+
         .mode-link {
             font-size: var(--font-size-sm);
             color: var(--text-secondary);
@@ -372,6 +405,96 @@ export class MainView extends LitElement {
 
         .mode-link:hover {
             color: var(--text-primary);
+        }
+
+        /* Home tabs */
+        .home-tabs {
+            display: flex;
+            gap: 12px;
+            margin: 8px 0 6px 0;
+            width: 100%;
+            justify-content: center;
+            align-items: center;
+            padding: 8px 6px;
+            max-width: 720px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            padding: 8px 6px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 160ms ease, color 120ms ease, border-color 120ms ease;
+            font-size: 12px;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            flex: 0 0 auto;
+            min-width: 80px;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+            color: var(--text-primary);
+            border-color: rgba(255,255,255,0.04);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 18px rgba(0,0,0,0.06);
+        }
+
+        .tab-btn:focus-visible {
+            outline: 3px solid rgba(59,130,246,0.16);
+            outline-offset: 2px;
+        }
+
+        .tab-icon {
+            width: 18px;
+            height: 18px;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .tab-label {
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
+            text-align: center;
+        }
+
+        /* Small toast for key validation feedback */
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 28px;
+            transform: translateX(-50%);
+            background: rgba(20,20,20,0.95);
+            color: #fff;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+            z-index: 99999;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            min-width: 180px;
+            justify-content: center;
+        }
+
+        .toast.ok {
+            background: linear-gradient(90deg, rgba(52,211,153,0.12), rgba(34,197,94,0.06));
+            color: #10b981;
+            border: 1px solid rgba(16,185,129,0.12);
+        }
+
+        .toast.error {
+            background: linear-gradient(90deg, rgba(239,68,68,0.06), rgba(239,68,68,0.02));
+            color: #f87171;
+            border: 1px solid rgba(239,68,68,0.08);
         }
 
         /* ── Mode option cards ── */
@@ -545,6 +668,7 @@ export class MainView extends LitElement {
     static properties = {
         onStart: { type: Function },
         onExternalLink: { type: Function },
+        onNavigate: { type: Function },
         selectedProfile: { type: String },
         onProfileChange: { type: Function },
         isInitializing: { type: Boolean },
@@ -567,12 +691,17 @@ export class MainView extends LitElement {
         _ollamaModel: { state: true },
         _whisperModel: { state: true },
         _showLocalHelp: { state: true },
+        _activeHomeTab: { state: true },
+        _activeNavView: { state: true },
+        _toastMessage: { state: true },
+        _toastType: { state: true },
     };
 
     constructor() {
         super();
         this.onStart = () => {};
         this.onExternalLink = () => {};
+        this.onNavigate = () => {};
         this.selectedProfile = 'interview';
         this.onProfileChange = () => {};
         this.isInitializing = false;
@@ -590,6 +719,10 @@ export class MainView extends LitElement {
         this._groqStatus = 'idle';
         this._anthropicStatus = 'idle';
         this._showLocalHelp = false;
+        this._activeHomeTab = 'start';
+    this._activeNavView = 'main';
+        this._toastMessage = '';
+        this._toastType = 'ok';
         this._ollamaHost = 'http://127.0.0.1:11434';
         this._ollamaModel = 'llama3.1';
         this._whisperModel = 'Xenova/whisper-small';
@@ -601,6 +734,37 @@ export class MainView extends LitElement {
 
         this.boundKeydownHandler = this._handleKeydown.bind(this);
         this._loadFromStorage();
+    }
+
+    _renderPageNavTabs() {
+        return html`
+            <div class="home-tabs" style="margin-top:16px;">
+                <button class="tab-btn ${this._activeNavView === 'main' ? 'active' : ''}" @click=${() => { this._activeNavView = 'main'; this.onNavigate('main'); }} title="Home">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"/></svg>`}</span>
+                    <span class="tab-label">Home</span>
+                </button>
+                <button class="tab-btn ${this._activeNavView === 'ai-customize' ? 'active' : ''}" @click=${() => { this._activeNavView = 'ai-customize'; this.onNavigate('ai-customize'); }} title="AI Customization">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M13 3v7h6l-8 11v-7H5z"/></svg>`}</span>
+                    <span class="tab-label">AI</span>
+                </button>
+                <button class="tab-btn ${this._activeNavView === 'history' ? 'active' : ''}" @click=${() => { this._activeNavView = 'history'; this.onNavigate('history'); }} title="History">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"/><path d="M12 8v4l3 3"/></svg>`}</span>
+                    <span class="tab-label">History</span>
+                </button>
+                <button class="tab-btn ${this._activeNavView === 'customize' ? 'active' : ''}" @click=${() => { this._activeNavView = 'customize'; this.onNavigate('customize'); }} title="Settings">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"/><path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0"/></svg>`}</span>
+                    <span class="tab-label">Settings</span>
+                </button>
+                <button class="tab-btn ${this._activeNavView === 'feedback' ? 'active' : ''}" @click=${() => { this._activeNavView = 'feedback'; this.onNavigate('feedback'); }} title="Feedback">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01"/><path d="M9.5 13a3.5 3.5 0 0 0 5 0"/></svg>`}</span>
+                    <span class="tab-label">Feedback</span>
+                </button>
+                <button class="tab-btn ${this._activeNavView === 'help' ? 'active' : ''}" @click=${() => { this._activeNavView = 'help'; this.onNavigate('help'); }} title="Help">
+                    <span class="tab-icon">${html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01"/><path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483"/></svg>`}</span>
+                    <span class="tab-label">Help</span>
+                </button>
+            </div>
+        `;
     }
 
     async _loadFromStorage() {
@@ -835,6 +999,126 @@ export class MainView extends LitElement {
         this.onProfileChange(e.target.value);
     }
 
+    _switchHomeTab(tab) {
+        this._activeHomeTab = tab;
+        this.requestUpdate();
+    }
+
+    _renderHomeTabs() {
+        return html`
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+                <button
+                    class="mode-link"
+                    style="padding:6px 10px;border-radius:8px;"
+                    @click=${() => this._switchHomeTab('start')}
+                    aria-pressed=${this._activeHomeTab === 'start'}
+                >Start</button>
+                <button
+                    class="mode-link"
+                    style="padding:6px 10px;border-radius:8px;"
+                    @click=${() => this._switchHomeTab('keys')}
+                    aria-pressed=${this._activeHomeTab === 'keys'}
+                >API Keys</button>
+            </div>
+        `;
+    }
+
+    _renderHomeStartTab() {
+        const profiles = [
+            { value: 'interview', label: 'Job Interview' },
+            { value: 'behavioral', label: 'Behavioral Interview' },
+            { value: 'coding', label: 'Coding Interview' },
+            { value: 'system_design', label: 'System Design' },
+            { value: 'case', label: 'Case Interview' },
+            { value: 'sales', label: 'Sales Call' },
+            { value: 'meeting', label: 'Business Meeting' },
+            { value: 'presentation', label: 'Presentation' },
+            { value: 'negotiation', label: 'Negotiation' },
+            { value: 'assistant', label: 'Assistant' },
+        ];
+
+        return html`
+            <div class="form-group">
+                <label class="form-label">Mode</label>
+                <div class="mode-control-wrap">
+                    <select class="control" .value=${this.selectedProfile} @change=${this._handleProfileChange}>
+                        ${profiles.map(profile => html`<option value=${profile.value}>${profile.label}</option>`)}
+                    </select>
+
+                    ${this._renderStartButton()}
+                </div>
+            </div>
+        `;
+    }
+
+    _renderHomeKeysTab() {
+        return html`
+            <div class="form-group">
+                <label class="form-label">Gemini API Key</label>
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Gemini API Key"
+                        .value=${this._geminiKey}
+                        @input=${e => { this._saveGeminiKey(e.target.value); this._geminiStatus = 'idle'; }}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._geminiKey.trim() || this._geminiStatus === 'checking'}
+                        @click=${() => this._validateGemini(this._geminiKey)}
+                    >Test</button>
+                </div>
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                    ${this._renderKeyStatus(this._geminiStatus)}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Groq API Key</label>
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Groq API Key"
+                        .value=${this._groqKey}
+                        @input=${e => { this._saveGroqKey(e.target.value); this._groqStatus = 'idle'; }}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._groqKey.trim() || this._groqStatus === 'checking'}
+                        @click=${() => this._validateGroq(this._groqKey)}
+                    >Test</button>
+                </div>
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
+                    ${this._renderKeyStatus(this._groqStatus)}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Anthropic API Key</label>
+                <div class="key-input-row">
+                    <input
+                        type="password"
+                        placeholder="Anthropic API Key"
+                        .value=${this._anthropicKey}
+                        @input=${e => { this._saveAnthropicKey(e.target.value); this._anthropicStatus = 'idle'; }}
+                    />
+                    <button
+                        class="validate-btn"
+                        ?disabled=${!this._anthropicKey.trim() || this._anthropicStatus === 'checking'}
+                        @click=${() => this._validateAnthropic(this._anthropicKey)}
+                    >Test</button>
+                </div>
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://console.anthropic.com/settings/keys')}>Get Anthropic key</span>
+                    ${this._renderKeyStatus(this._anthropicStatus)}
+                </div>
+            </div>
+            ${this._toastMessage ? html`<div class="toast ${this._toastType}">${this._toastMessage}</div>` : ''}
+        `;
+    }
+
     // ── Key Validation ──
 
     async _validateGemini(key) {
@@ -847,8 +1131,10 @@ export class MainView extends LitElement {
                 { signal: AbortSignal.timeout(8000) }
             );
             this._geminiStatus = res.ok ? 'ok' : 'error';
+            this._showValidationToast('Gemini', res.ok);
         } catch {
             this._geminiStatus = 'error';
+            this._showValidationToast('Gemini', false);
         }
         this.requestUpdate();
     }
@@ -863,8 +1149,10 @@ export class MainView extends LitElement {
                 signal: AbortSignal.timeout(8000),
             });
             this._groqStatus = res.ok ? 'ok' : 'error';
+            this._showValidationToast('Groq', res.ok);
         } catch {
             this._groqStatus = 'error';
+            this._showValidationToast('Groq', false);
         }
         this.requestUpdate();
     }
@@ -885,10 +1173,23 @@ export class MainView extends LitElement {
             });
             // 200 = valid key, anything else (401/403) = invalid
             this._anthropicStatus = res.status === 200 ? 'ok' : 'error';
+            this._showValidationToast('Anthropic', res.status === 200);
         } catch {
             this._anthropicStatus = 'error';
+            this._showValidationToast('Anthropic', false);
         }
         this.requestUpdate();
+    }
+
+    _showValidationToast(provider, success) {
+        this._toastType = success ? 'ok' : 'error';
+        this._toastMessage = success ? `${provider} key valid` : `${provider} key invalid`;
+        this.requestUpdate();
+        if (this._toastTimer) clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => {
+            this._toastMessage = '';
+            this.requestUpdate();
+        }, 3200);
     }
 
     // Render a small status pill
@@ -1239,10 +1540,13 @@ export class MainView extends LitElement {
                       'Run models locally on your machine'}
                 </div>
 
-                ${this._mode === 'cloud' ? this._renderCloudMode() : ''}
-                ${this._mode === 'byok' ? this._renderByokMode() : ''}
-                ${this._mode === 'anthropic' ? this._renderAnthropicMode() : ''}
-                ${this._mode === 'local' ? (this._showLocalHelp ? this._renderLocalHelp() : this._renderLocalMode()) : ''}
+                <div class="top-section">
+                    ${this._renderTopContent()}
+                </div>
+
+                ${this._renderPageNavTabs()}
+
+                <!-- Mode-specific sections removed from Home to avoid duplicate controls; functionality unchanged -->
             </div>
         `;
     }
@@ -1301,6 +1605,31 @@ export class MainView extends LitElement {
             </div>
         `;
     }
+
+        _renderTopContent() {
+            // Top content switches based on the active bottom-nav view
+            switch (this._activeNavView) {
+                case 'ai-customize':
+                    return html`<div class="page-subtitle">AI customization options</div>
+                        ${this._renderAISettings ? this._renderAISettings() : html`<div class="form-group">${this._renderDivider()}</div>`}`;
+                case 'history':
+                    return html`<div class="page-subtitle">Browse past sessions</div>`;
+                case 'customize':
+                    return html`<div class="page-subtitle">General settings</div>`;
+                case 'feedback':
+                    return html`<div class="page-subtitle">Send feedback</div>`;
+                case 'help':
+                    return html`${this._renderLocalHelp()}`;
+                case 'main':
+                default:
+                    // Default home/start UI
+                    return html`
+                        ${this._renderHomeTabs()}
+                        ${this._activeHomeTab === 'start' ? this._renderHomeStartTab() : ''}
+                        ${this._activeHomeTab === 'keys' ? this._renderHomeKeysTab() : ''}
+                    `;
+            }
+        }
 }
 
 customElements.define('main-view', MainView);

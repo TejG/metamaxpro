@@ -600,30 +600,24 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     );
 }
 
-const MANUAL_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
-If its a question about the website, give me the answer no bs, complete answer.
-If its a mcq question, give me the answer no bs, complete answer.`;
-
-const CODING_EXERCISE_PROMPT = `You are solving a coding exercise. I have provided one or more screenshots of the COMPLETE problem.
-
+const MANUAL_SCREENSHOT_PROMPT = `Please analyze the attached screenshot(s) and provide a concise, helpful answer.
+If the screenshot clearly contains a coding exercise, follow these steps:
 First, carefully read ALL screenshots to understand the full problem, constraints, examples, and edge cases.
-
 Then identify the programming language (check for language selector, code template, or context clues in the screenshots).
-
 Provide your response in this format:
-
 **Language:** [detected language]
-
 **Approach:**
-- [brief bullet points explaining your strategy, max 3]
-
+- [brief bullet points explaining your strategy as me, max 5]
 **Solution:**
 \`\`\`[language]
 [complete, working, copy-paste ready code that handles all edge cases]
 \`\`\`
-
-No partial solutions. The code must pass all the examples shown.`;
+No partial solutions. The code must pass all the examples shown.
+**Explanation:**
+- [Explain the code as an expert with detailed comments and insights]
+**Time Complexity:**
+- [Analyze the time complexity of the solution, considering different scenarios and inputs]
+`;
 
 // Shared helper: initialise video+canvas and return a base64 JPEG frame
 async function _captureFrameAsBase64(quality = 'medium') {
@@ -714,14 +708,14 @@ async function analyzeWithCapturedScreenshots(imageQuality = null) {
     }
     const screenshots = [...capturedScreenshots];
     capturedScreenshots = [];
-    console.log(`Analysing ${screenshots.length} captured screenshots as coding exercise...`);
+    console.log(`Analysing ${screenshots.length} captured screenshots...`);
 
     // Show immediate placeholder so the user sees feedback before the first token
     metaMaxPro.addNewResponse('...');
 
     const result = await ipcRenderer.invoke('send-multiple-images-content', {
         images: screenshots,
-        prompt: CODING_EXERCISE_PROMPT,
+        prompt: MANUAL_SCREENSHOT_PROMPT,
     });
     if (!result.success) {
         console.error('Failed to analyse screenshots:', result.error);

@@ -337,9 +337,11 @@ function incrementLimitCount(model) {
     }
 
     // Increment the appropriate model count
-    if (model === 'gemini-2.5-flash') {
+    if (model === 'gemini-2.5-flash' || model === 'gemma-3-27b-it') {
+        todayEntry.flash = todayEntry.flash || { count: 0 };
         todayEntry.flash.count++;
     } else if (model === 'gemini-2.5-flash-lite') {
+        todayEntry.flashLite = todayEntry.flashLite || { count: 0 };
         todayEntry.flashLite.count++;
     }
 
@@ -367,13 +369,17 @@ function getAvailableModel() {
 
     // RPD limits: flash = 20, flash-lite = 20
     // After both exhausted, fall back to flash (for paid API users)
+    // Prefer the new gemma fallback first if available in limits
+    // Updated defaults: some environments don't have 'gemma-3-27b-it' available
+    // Prefer stable Gemini models that are commonly available in the API.
     if (todayLimits.flash.count < 20) {
-        return 'gemini-2.5-flash';
+        return 'gemini-1.5';
     } else if (todayLimits.flashLite.count < 20) {
         return 'gemini-2.5-flash-lite';
     }
 
-    return 'gemini-2.5-flash'; // Default to flash for paid API users
+    // As a final fallback, try a broadly supported Gemini model name.
+    return 'gemini-1.5';
 }
 
 function getModelForToday() {
@@ -409,6 +415,17 @@ function saveSession(sessionId, data) {
     // Load existing session to preserve metadata
     const existingSession = readJsonFile(sessionPath, null);
 
+    // Merge arrays carefully: if caller passes an empty array unintentionally we don't
+    // overwrite existing history. Prefer caller-provided non-empty arrays, otherwise
+    // preserve existing session data.
+    const mergedConversation = (Array.isArray(data.conversationHistory) && data.conversationHistory.length > 0)
+        ? data.conversationHistory
+        : (existingSession?.conversationHistory || []);
+
+    const mergedScreenAnalysis = (Array.isArray(data.screenAnalysisHistory) && data.screenAnalysisHistory.length > 0)
+        ? data.screenAnalysisHistory
+        : (existingSession?.screenAnalysisHistory || []);
+
     const sessionData = {
         sessionId,
         createdAt: existingSession?.createdAt || parseInt(sessionId),
@@ -416,11 +433,22 @@ function saveSession(sessionId, data) {
         // Profile context - set once when session starts
         profile: data.profile || existingSession?.profile || null,
         customPrompt: data.customPrompt || existingSession?.customPrompt || null,
-        // Conversation data
-        conversationHistory: data.conversationHistory || existingSession?.conversationHistory || [],
-        screenAnalysisHistory: data.screenAnalysisHistory || existingSession?.screenAnalysisHistory || []
+        // Conversation data (merged)
+        conversationHistory: mergedConversation,
+        screenAnalysisHistory: mergedScreenAnalysis
     };
-    return writeJsonFile(sessionPath, sessionData);
+
+    const ok = writeJsonFile(sessionPath, sessionData);
+    if (!ok) {
+        console.error(`Failed to write session file: ${sessionPath}`);
+    } else {
+        // Helpful debug for tracing saves
+        try {
+            console.log(`Session saved: ${sessionId} (messages=${sessionData.conversationHistory.length}, analyses=${sessionData.screenAnalysisHistory.length})`);
+        } catch (e) {}
+    }
+
+    return ok;
 }
 
 function getSession(sessionId) {

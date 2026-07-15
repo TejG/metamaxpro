@@ -22,15 +22,18 @@ export class AssistantView extends LitElement {
             line-height: var(--line-height);
             background: var(--bg-app);
             padding: var(--space-sm) var(--space-md);
+            /* Reserve space at the bottom for the nav + bookmarks + input bar so
+               the last response is never hidden under controls */
+            padding-bottom: 140px;
             scroll-behavior: smooth;
             user-select: text;
-            cursor: text;
+            cursor: pointer;
             color: var(--text-primary);
         }
 
         .response-container * {
             user-select: text;
-            cursor: text;
+            cursor: pointer;
         }
 
         .response-container a {
@@ -100,6 +103,28 @@ export class AssistantView extends LitElement {
             padding: var(--space-md);
             overflow-x: auto;
             margin: 0.8em 0;
+        }
+
+        /* Copy button for code blocks */
+        .response-container pre { position: relative; }
+        .code-copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(0,0,0,0.55);
+            color: #fff;
+            border: none;
+            padding: 6px 8px;
+            font-size: 11px;
+            border-radius: 6px;
+            cursor: pointer;
+            backdrop-filter: blur(6px);
+            transition: transform 140ms ease, opacity 140ms ease;
+            z-index: 5;
+        }
+        .code-copy-btn:hover { transform: translateY(-2px); }
+        .code-copy-btn.copied {
+            background: #00a86b;
         }
 
         .response-container pre code {
@@ -193,6 +218,8 @@ export class AssistantView extends LitElement {
             padding: var(--space-xs) var(--space-md);
             border-top: 1px solid var(--border);
             background: var(--bg-app);
+            position: relative;
+            z-index: 2; /* ensure buttons sit above response content */
         }
 
         .nav-btn {
@@ -206,6 +233,11 @@ export class AssistantView extends LitElement {
             align-items: center;
             justify-content: center;
             transition: color var(--transition);
+            /* Make buttons larger and easier to click */
+            min-width: 40px;
+            min-height: 40px;
+            width: 40px;
+            height: 40px;
         }
 
         .nav-btn:hover:not(:disabled) {
@@ -218,8 +250,8 @@ export class AssistantView extends LitElement {
         }
 
         .nav-btn svg {
-            width: 14px;
-            height: 14px;
+            width: 18px;
+            height: 18px;
         }
 
         .response-counter {
@@ -275,6 +307,17 @@ export class AssistantView extends LitElement {
             transition: border-color 0.15s, color 0.15s, background 0.15s;
         }
 
+        /* Entrance animation so new chips are noticeable */
+        .bookmark-chip {
+            animation: chip-pop 540ms cubic-bezier(.2,.8,.2,1);
+        }
+
+        @keyframes chip-pop {
+            0% { transform: translateY(-6px) scale(0.96); opacity: 0; }
+            60% { transform: translateY(2px) scale(1.03); opacity: 1; }
+            100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+
         .bookmark-chip:hover {
             border-color: var(--accent);
             color: var(--text-primary);
@@ -305,34 +348,7 @@ export class AssistantView extends LitElement {
             color: #34d399;
         }
 
-        /* ── Gaze correction button ── */
 
-        .gaze-btn {
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-            cursor: pointer;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: border-color var(--transition), color var(--transition), background var(--transition);
-        }
-
-        .gaze-btn:hover {
-            border-color: var(--accent);
-            color: var(--text-primary);
-            background: var(--bg-surface);
-        }
-
-        .gaze-btn.active {
-            border-color: #34d399;
-            color: #34d399;
-            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
-        }
 
         /* ── Bottom input bar ── */
 
@@ -342,6 +358,7 @@ export class AssistantView extends LitElement {
             gap: var(--space-sm);
             padding: var(--space-md);
             background: var(--bg-app);
+            flex-wrap: nowrap; /* keep children on a single row */
         }
 
         .input-bar-inner {
@@ -350,10 +367,11 @@ export class AssistantView extends LitElement {
             flex: 1;
             background: var(--bg-elevated);
             border: 1px solid var(--border);
-            border-radius: 100px;
+            border-radius: 10px;
             padding: 0 var(--space-md);
             height: 32px;
             transition: border-color var(--transition);
+            min-width: 0; /* allow the input to shrink inside flex */
         }
 
         .input-bar-inner:focus-within {
@@ -370,6 +388,7 @@ export class AssistantView extends LitElement {
             font-family: var(--font);
             height: 100%;
             outline: none;
+            min-width: 0; /* allow input to shrink below its content */
         }
 
         .input-bar-inner input::placeholder {
@@ -393,6 +412,7 @@ export class AssistantView extends LitElement {
             gap: 4px;
             transition: border-color var(--transition), background var(--transition);
             flex-shrink: 0;
+            flex: 0 0 auto; /* ensure it doesn't grow or shrink unexpectedly */
         }
 
         .capture-btn:hover {
@@ -437,6 +457,7 @@ export class AssistantView extends LitElement {
             transition: border-color 0.4s ease, background var(--transition);
             flex-shrink: 0;
             overflow: hidden;
+            flex: 0 0 auto; /* keep button on the same row */
         }
 
         .analyze-btn:hover:not(.analyzing) {
@@ -469,12 +490,41 @@ export class AssistantView extends LitElement {
             height: calc(100% + 2px);
             pointer-events: none;
         }
+
+        /* ── Color-coded feedback for code generation failures/corrections ── */
+        .code-line {
+            color: #FFFFFF; /* White code text */
+            text-shadow: 0 0 0.6px #000000; /* thin black outline */
+        }
+
+        .comment-line {
+            color: rgba(255,255,255,0.7); /* light gray / semi-transparent white */
+            text-shadow: 0 0 0.6px #000000;
+            font-style: italic;
+        }
+
+        /* Corrections: neon highlights with dark shadow for visibility */
+        .correction {
+            text-shadow: 0 0 6px rgba(0,0,0,0.85);
+            padding: 0 2px;
+        }
+
+        .correction.addition {
+            color: #00FF00; /* bright neon green */
+            box-shadow: 0 0 8px rgba(0,255,0,0.12), 0 0 2px rgba(0,0,0,0.6) inset;
+        }
+
+        .correction.deletion {
+            color: #FF3333; /* neon red / coral */
+            box-shadow: 0 0 8px rgba(255,51,51,0.12), 0 0 2px rgba(0,0,0,0.6) inset;
+        }
     `;
 
     static properties = {
         responses: { type: Array },
         currentResponseIndex: { type: Number },
         selectedProfile: { type: String },
+        sessionActive: { type: Boolean },
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
@@ -488,6 +538,7 @@ export class AssistantView extends LitElement {
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
+        this.sessionActive = false;
         this.isAnalyzing = false;
         this.capturedCount = 0;
         this.gazeWindowOpen = false;
@@ -567,7 +618,9 @@ export class AssistantView extends LitElement {
 
     navigateToPreviousResponse() {
         if (this.currentResponseIndex > 0) {
-            this.currentResponseIndex--;
+            const prev = this.currentResponseIndex - 1;
+            try { console.log('[UI DEBUG] navigateToPreviousResponse ->', prev); } catch (e) {}
+            this.currentResponseIndex = prev;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index: this.currentResponseIndex } }));
             this.requestUpdate();
         }
@@ -575,7 +628,9 @@ export class AssistantView extends LitElement {
 
     navigateToNextResponse() {
         if (this.currentResponseIndex < this.responses.length - 1) {
-            this.currentResponseIndex++;
+            const next = this.currentResponseIndex + 1;
+            try { console.log('[UI DEBUG] navigateToNextResponse ->', next); } catch (e) {}
+            this.currentResponseIndex = next;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index: this.currentResponseIndex } }));
             this.requestUpdate();
         }
@@ -583,6 +638,7 @@ export class AssistantView extends LitElement {
 
     navigateToResponse(index) {
         if (index >= 0 && index < this.responses.length) {
+            try { console.log('[UI DEBUG] navigateToResponse ->', index); } catch (e) {}
             this.currentResponseIndex = index;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index } }));
             this.requestUpdate();
@@ -599,14 +655,21 @@ export class AssistantView extends LitElement {
         let diagramCount = 0;
         let codeCount = 0;
         this.responses.forEach((resp, i) => {
-            const hasDiagram = /```mermaid/i.test(resp);
-            const hasCode = !hasDiagram && /```[\w]/i.test(resp);
+            // Detect mermaid diagrams and code blocks. Responses may be raw markdown
+            // or already-annotated HTML (we annotate code blocks into <pre><code ...>).
+            const hasDiagram = /```mermaid/i.test(resp) || /class=["']?mermaid["']?/i.test(resp) || /<div[^>]*class=["']?mermaid["']?/i.test(resp);
+            const fencedLangMatch = resp.match(/```\s*([a-zA-Z0-9_+-]+)/);
+            const htmlLangMatch = resp.match(/<pre>\s*<code[^>]*class=['"][^'">]*language-([a-zA-Z0-9_+-]+)/i);
+            const languageHint = (fencedLangMatch && fencedLangMatch[1]) || (htmlLangMatch && htmlLangMatch[1]) || null;
+            const hasCode = !hasDiagram && (/```[\w]/i.test(resp) || /<pre>\s*<code\b/i.test(resp) || /class=["']language-/i.test(resp));
+
             if (hasDiagram) {
                 diagramCount++;
                 bookmarks.push({ index: i, type: 'diagram', label: `Diagram ${diagramCount > 1 ? diagramCount : ''}`.trim() });
             } else if (hasCode) {
                 codeCount++;
-                bookmarks.push({ index: i, type: 'code', label: `Code ${codeCount > 1 ? codeCount : ''}`.trim() });
+                const langLabel = languageHint ? ` (${languageHint})` : '';
+                bookmarks.push({ index: i, type: 'code', label: `Code${langLabel}`.trim() });
             }
         });
         return bookmarks;
@@ -644,6 +707,10 @@ export class AssistantView extends LitElement {
             ipcRenderer.on('scroll-response-up', this.handleScrollUp);
             ipcRenderer.on('scroll-response-down', this.handleScrollDown);
         }
+
+        // Keyboard shortcuts local to the assistant view (capture / solve)
+        this._boundKeydown = (e) => this._handleKeydownGlobal(e);
+        window.addEventListener('keydown', this._boundKeydown);
     }
 
     toggleGazeWindow() {
@@ -673,6 +740,55 @@ export class AssistantView extends LitElement {
             if (this.handleScrollUp) ipcRenderer.removeListener('scroll-response-up', this.handleScrollUp);
             if (this.handleScrollDown) ipcRenderer.removeListener('scroll-response-down', this.handleScrollDown);
         }
+
+        if (this._boundKeydown) {
+            window.removeEventListener('keydown', this._boundKeydown);
+            this._boundKeydown = null;
+        }
+    }
+
+    /**
+     * Global key handler for shortcuts: C = capture, S = solve/analyze
+     */
+    _handleKeydownGlobal(e) {
+        // Ignore when user is typing in the text input
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
+
+        const key = e.key.toLowerCase();
+        // Support Cmd/Ctrl + Shift + C / S as well as plain C/S
+        const modifier = e.metaKey || e.ctrlKey;
+
+        if (key === 'c' && (!modifier || e.shiftKey)) {
+            e.preventDefault();
+            this.handleCaptureScreenshot();
+            return;
+        }
+
+        if (key === 's' && (!modifier || e.shiftKey)) {
+            e.preventDefault();
+            this.handleScreenAnswer();
+            return;
+        }
+
+        // Copy first code block: Cmd/Ctrl+Shift+K
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && key === 'k') {
+            e.preventDefault();
+            this._copyFirstCodeBlock();
+            return;
+        }
+    }
+
+    // Allow programmatic shortcuts from main via metaMaxPro.handleShortcut -> executeJavaScript
+    handleShortcut(shortcutKey) {
+        // Accept 'cmd+enter' / 'ctrl+enter' already handled elsewhere
+        const k = (shortcutKey || '').toLowerCase();
+        if (k === 'capture' || k === 'c') {
+            this.handleCaptureScreenshot();
+        }
+        if (k === 'solve' || k === 's') {
+            this.handleScreenAnswer();
+        }
     }
 
     async handleSendText() {
@@ -695,6 +811,40 @@ export class AssistantView extends LitElement {
         if (window.captureScreenshotToBuffer) {
             const count = await window.captureScreenshotToBuffer();
             this.capturedCount = count;
+        }
+    }
+
+    async _copyFirstCodeBlock() {
+        const container = this.shadowRoot.querySelector('#responseContainer');
+        if (!container) return;
+        const firstPre = container.querySelector('pre');
+        if (!firstPre) return;
+        // Try to find the copy button inside pre
+        const btn = firstPre.querySelector('.code-copy-btn');
+        if (btn) {
+            // Trigger the same behavior as clicking the button
+            await this._copyPreContent(firstPre, btn);
+        } else {
+            // Fallback: copy text directly
+            try {
+                const code = firstPre.querySelector('code');
+                const text = (code ? code.textContent : firstPre.textContent).trim();
+                await navigator.clipboard.writeText(text);
+                // show a tiny visual feedback by temporarily appending a toast inside container
+                const toast = document.createElement('div');
+                toast.textContent = 'Copied';
+                toast.style.position = 'fixed';
+                toast.style.right = '18px';
+                toast.style.bottom = '18px';
+                toast.style.background = 'rgba(0,0,0,0.75)';
+                toast.style.color = '#fff';
+                toast.style.padding = '6px 10px';
+                toast.style.borderRadius = '6px';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 1200);
+            } catch (e) {
+                console.warn('Copy fallback failed:', e);
+            }
         }
     }
 
@@ -940,6 +1090,65 @@ export class AssistantView extends LitElement {
             if (this.shouldAnimateResponse) {
                 this.dispatchEvent(new CustomEvent('response-animation-complete', { bubbles: true, composed: true }));
             }
+
+            // After rendering, add copy buttons to code blocks
+            this._attachCopyButtons(container);
+        }
+    }
+
+    _attachCopyButtons(container) {
+        // Remove existing buttons first
+        const existing = container.querySelectorAll('.code-copy-btn');
+        existing.forEach(b => b.remove());
+
+        const pres = container.querySelectorAll('pre');
+        pres.forEach((pre, idx) => {
+            // Create button
+            const btn = document.createElement('button');
+            btn.className = 'code-copy-btn';
+            btn.type = 'button';
+            btn.textContent = 'Copy';
+            btn.title = 'Copy code to clipboard (Shift+Cmd/Ctrl+K)';
+            btn.addEventListener('click', async () => {
+                await this._copyPreContent(pre, btn);
+            });
+            pre.appendChild(btn);
+        });
+    }
+
+    async _copyPreContent(pre, btn) {
+        try {
+            let codeText = '';
+            const code = pre.querySelector('code');
+            if (code) {
+                // Prefer textContent which preserves formatting
+                codeText = code.textContent || pre.textContent || '';
+            } else {
+                codeText = pre.textContent || '';
+            }
+            const textToCopy = codeText.trim();
+            // Prefer Electron clipboard when available (more reliable in Electron renderer)
+            if (window && window.require) {
+                try {
+                    const { clipboard } = window.require('electron');
+                    clipboard.writeText(textToCopy);
+                } catch (e) {
+                    // Fall back to navigator
+                    await navigator.clipboard.writeText(textToCopy);
+                }
+            } else {
+                await navigator.clipboard.writeText(textToCopy);
+            }
+            btn.classList.add('copied');
+            btn.textContent = 'Copied';
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.textContent = 'Copy';
+            }, 1200);
+        } catch (e) {
+            console.warn('Copy failed:', e);
+            btn.textContent = 'Error';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
         }
     }
 
@@ -952,15 +1161,32 @@ export class AssistantView extends LitElement {
         return html`
             <div class="response-container" id="responseContainer"></div>
 
-            ${showNav ? html`
+            ${this.sessionActive && showNav ? html`
             <div class="response-nav">
-                <button class="nav-btn" ?disabled=${!hasPrev} @click=${this.navigateToPreviousResponse} title="Previous response">
+                <!-- Previous -->
+                <button
+                    class="nav-btn"
+                    ?disabled=${!hasPrev}
+                    @click=${this.navigateToPreviousResponse}
+                    title="Previous response"
+                    aria-label="Previous response"
+                >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="15 18 9 12 15 6"/>
                     </svg>
                 </button>
-                <span class="response-counter">${this.currentResponseIndex + 1} / ${this.responses.length}</span>
-                <button class="nav-btn" ?disabled=${!hasNext} @click=${this.navigateToNextResponse} title="Next response">
+
+                <!-- Counter between arrows to show current index -->
+                <div class="response-counter">${this.responses.length ? `${this.currentResponseIndex + 1} / ${this.responses.length}` : ''}</div>
+
+                <!-- Next -->
+                <button
+                    class="nav-btn"
+                    ?disabled=${!hasNext}
+                    @click=${this.navigateToNextResponse}
+                    title="Next response"
+                    aria-label="Next response"
+                >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="9 18 15 12 9 6"/>
                     </svg>
@@ -968,7 +1194,7 @@ export class AssistantView extends LitElement {
             </div>
             ` : ''}
 
-            ${bookmarks.length > 0 ? html`
+            ${this.sessionActive && bookmarks.length > 0 ? html`
             <div class="bookmark-strip">
                 <span class="bookmark-strip-label">Jump to:</span>
                 ${bookmarks.map(bm => html`
@@ -983,6 +1209,7 @@ export class AssistantView extends LitElement {
             </div>
             ` : ''}
 
+            ${this.sessionActive ? html`
             <div class="input-bar">
                 <div class="input-bar-inner">
                     <input
@@ -992,16 +1219,6 @@ export class AssistantView extends LitElement {
                         @keydown=${this.handleTextKeydown}
                     />
                 </div>
-                <button
-                    class="gaze-btn ${this.gazeWindowOpen ? 'active' : ''}"
-                    @click=${this.toggleGazeWindow}
-                    title="${this.gazeWindowOpen ? 'Close eye-contact window' : 'Open eye-contact correction'}"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                        <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                </button>
                 <button
                     class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
                     @click=${this.handleCaptureScreenshot}
@@ -1024,6 +1241,7 @@ export class AssistantView extends LitElement {
                     </span>
                 </button>
             </div>
+            ` : ''}
         `;
     }
 }

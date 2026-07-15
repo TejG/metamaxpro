@@ -117,6 +117,26 @@ function sendToRenderer(channel, data) {
     }
 }
 
+// Environment override for Gemini/fallback models
+// Default to a broadly available Gemini model name; allow env var to override.
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-1.5';
+const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-09-2025';
+
+function isModelNotFoundError(err) {
+    if (!err) return false;
+    const msg = (err.message || err.toString() || '').toLowerCase();
+    if (msg.includes('not found') || msg.includes('no longer available') || msg.includes('models/') && msg.includes('is no longer')) return true;
+    // Some clients attach a nested response object
+    try {
+        const body = err.response?.body || err.body || err.response?.data || null;
+        const s = JSON.stringify(body || '');
+        if (s.toLowerCase().includes('is no longer available') || s.toLowerCase().includes('not found')) return true;
+    } catch (e) {
+        // ignore
+    }
+    return false;
+}
+
 // Build context message for session restoration
 function buildContextMessage() {
     const lastTurns = conversationHistory.slice(-20);
@@ -149,6 +169,7 @@ function initializeNewSession(profile = null, customPrompt = null) {
 
     // Persist session context to disk immediately (no IPC round-trip)
     if (profile) {
+        console.log('[STORAGE DEBUG] persistSession -> context', { sessionId: currentSessionId, profile, customPrompt: customPrompt || '' });
         persistSession(currentSessionId, { profile, customPrompt: customPrompt || '' });
         sendToRenderer('save-session-context', {
             sessionId: currentSessionId,
@@ -172,6 +193,7 @@ function saveConversationTurn(transcription, aiResponse) {
     conversationHistory.push(conversationTurn);
 
     // Write directly to disk from main process — survives crashes and renderer busy states
+    console.log('[STORAGE DEBUG] persistSession -> conversation turn', { sessionId: currentSessionId, newTurn: conversationTurn, totalTurns: conversationHistory.length });
     persistSession(currentSessionId, { conversationHistory });
     console.log('Saved conversation turn:', conversationTurn);
 
@@ -198,6 +220,7 @@ function saveScreenAnalysis(prompt, response, model) {
     screenAnalysisHistory.push(analysisEntry);
 
     // Write directly to disk from main process
+    console.log('[STORAGE DEBUG] persistSession -> screen analysis', { sessionId: currentSessionId, newEntry: analysisEntry, total: screenAnalysisHistory.length });
     persistSession(currentSessionId, { screenAnalysisHistory });
     console.log('Saved screen analysis:', analysisEntry);
 
@@ -641,8 +664,12 @@ async function sendToGemma(transcription) {
             ...messages
         ];
 
+        // Pick a model for this call. Prefer today's selected model but fall
+        // back to the configured GEMINI_FALLBACK_MODEL when necessary.
+        const chosenModel = getAvailableModel() || GEMINI_FALLBACK_MODEL;
+        console.log('[Gemini] sendToGemma using model:', chosenModel);
         const response = await ai.models.generateContentStream({
-            model: 'gemma-3-27b-it',
+            model: chosenModel,
             contents: messagesWithSystem,
         });
 
@@ -661,7 +688,7 @@ async function sendToGemma(transcription) {
         const inputChars = systemPromptChars + historyChars;
         const outputChars = fullText.length;
 
-        incrementCharUsage('gemini', 'gemma-3-27b-it', inputChars + outputChars);
+    incrementCharUsage('gemini', chosenModel, inputChars + outputChars);
 
         if (fullText.trim()) {
             groqConversationHistory.push({
@@ -895,7 +922,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
     try {
         const session = await client.live.connect({
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+            model: GEMINI_LIVE_MODEL,
             callbacks: {
                 onopen: function () {
                     sessionReadyAt = Date.now();
@@ -989,6 +1016,90 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         }
         return session;
     } catch (error) {
+        console.error('Failed to initialize Gemini session (first attempt):', error);
+        // If the configured model is no longer available, try a fallback model
+        if (isModelNotFoundError(error) && GEMINI_FALLBACK_MODEL) {
+            try {
+                console.log('Attempting to reconnect using fallback model:', GEMINI_FALLBACK_MODEL);
+                const session = await client.live.connect({
+                    model: GEMINI_FALLBACK_MODEL,
+                    callbacks: {
+                        onopen: function () {
+                            sessionReadyAt = Date.now();
+                            sendToRenderer('update-status', 'Live session connected (fallback)');
+                        },
+                        onmessage: function (message) {
+                            console.log('----------------', message);
+                            if (message.serverContent?.inputTranscription?.results) {
+                                currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
+                                scheduleGroqTrigger();
+                            } else if (message.serverContent?.inputTranscription?.text) {
+                                const text = message.serverContent.inputTranscription.text;
+                                if (text.trim() !== '') {
+                                    currentTranscription += text;
+                                    scheduleGroqTrigger();
+                                }
+                            }
+                            if (message.serverContent?.turnComplete) {
+                                sendToRenderer('update-status', 'Listening...');
+                                if (transcriptionSilenceTimer) {
+                                    clearTimeout(transcriptionSilenceTimer);
+                                    transcriptionSilenceTimer = null;
+                                }
+                                if (currentTranscription.trim() !== '') {
+                                    sendToRenderer('new-response', '...');
+                                    if (hasGroqKey()) {
+                                        sendToGroq(currentTranscription);
+                                    } else {
+                                        sendToGemma(currentTranscription);
+                                    }
+                                    currentTranscription = '';
+                                }
+                            }
+                        },
+                        onerror: function (e) {
+                            console.log('Session error:', e.message);
+                            sendToRenderer('update-status', 'Error: ' + e.message);
+                        },
+                        onclose: function (e) {
+                            console.log('Session closed:', e.reason);
+                            if (isUserClosing) {
+                                isUserClosing = false;
+                                sendToRenderer('update-status', 'Session closed');
+                                return;
+                            }
+                            if (sessionParams && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                                attemptReconnect();
+                            } else {
+                                sendToRenderer('update-status', 'Session closed');
+                            }
+                        },
+                    },
+                    config: {
+                        responseModalities: [Modality.AUDIO],
+                        proactivity: { proactiveAudio: true },
+                        outputAudioTranscription: {},
+                        tools: enabledTools,
+                        inputAudioTranscription: {
+                            enableSpeakerDiarization: true,
+                            minSpeakerCount: 2,
+                            maxSpeakerCount: 2,
+                        },
+                        contextWindowCompression: { slidingWindow: {} },
+                        speechConfig: { languageCode: language },
+                        systemInstruction: {
+                            parts: [{ text: systemPrompt }],
+                        },
+                    },
+                });
+
+                isInitializingSession = false;
+                if (!isReconnect) sendToRenderer('session-initializing', false);
+                return session;
+            } catch (err2) {
+                console.error('Fallback model connect failed:', err2);
+            }
+        }
         console.error('Failed to initialize Gemini session:', error);
         isInitializingSession = false;
         if (!isReconnect) {
@@ -1252,7 +1363,17 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 
 async function sendImageToGeminiHttp(base64Data, prompt) {
     // Get available model based on rate limits
-    const model = getAvailableModel();
+    let model = getAvailableModel();
+
+    // Candidate fallback list in order of preference. Keep names conservative to
+    // avoid using models that may not exist in some API tiers.
+    const MODEL_FALLBACKS = [
+        model,
+        'gemini-1.5',
+        'gemini-1.5-pro',
+        'gemini-2.1',
+        'gemini-2.5-flash-lite',
+    ];
 
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -1261,7 +1382,6 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
     try {
         const ai = new GoogleGenAI({ apiKey: apiKey });
-
         const contents = [
             {
                 inlineData: {
@@ -1272,11 +1392,58 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             { text: prompt },
         ];
 
-        console.log(`Sending image to ${model} (streaming)...`);
-        const response = await ai.models.generateContentStream({
-            model: model,
-            contents: contents,
-        });
+        console.log(`[Gemini] Sending single image to ${model} (streaming)...`);
+
+        // Attempt a few transient network/fetch retries and also try alternate
+        // model names if the API returns a 404 model-not-found error. We iterate
+        // through MODEL_FALLBACKS and for each model we allow a few internal
+        // attempts to handle transient failures.
+        const MAX_ATTEMPTS_PER_MODEL = 2;
+        let response = null;
+        let lastErr = null;
+        for (const candidateModel of MODEL_FALLBACKS) {
+            let attempt = 0;
+            model = candidateModel;
+            while (attempt < MAX_ATTEMPTS_PER_MODEL) {
+                try {
+                    console.log(`[Gemini] trying model ${model} (attempt ${attempt + 1}/${MAX_ATTEMPTS_PER_MODEL})`);
+                    response = await ai.models.generateContentStream({ model: model, contents: contents });
+                    lastErr = null;
+                    break; // got a response for this model
+                } catch (err) {
+                    lastErr = err;
+                    const msg = err && (err.message || err.toString());
+                    console.error(`[Gemini] generateContentStream failed for model ${model} attempt ${attempt + 1}:`, msg, err && err.stack ? err.stack : err);
+
+                    // If it's a 404 / model-not-found error, break out to try the next model
+                    const isNotFound = msg && msg.toLowerCase().includes('not found') && msg.toLowerCase().includes('model');
+                    attempt++;
+                    if (isNotFound) {
+                        console.log(`[Gemini] model ${model} not available for this API version, trying next fallback`);
+                        break; // try next candidateModel
+                    }
+
+                    if (attempt < MAX_ATTEMPTS_PER_MODEL) {
+                        const waitMs = 500 * attempt;
+                        console.log(`[Gemini] retrying in ${waitMs}ms...`);
+                        await new Promise(r => setTimeout(r, waitMs));
+                        continue;
+                    }
+                }
+            }
+
+            if (response) break; // success, stop trying other models
+        }
+
+        if (lastErr && !response) {
+            // All candidate models/attempts failed — log which models were attempted
+            console.error('[Gemini] All candidate models failed for image generation. Last error:', lastErr && (lastErr.message || lastErr.toString()));
+            throw lastErr;
+        }
+
+        if (!response) {
+            throw new Error('No response from Gemini generateContentStream');
+        }
 
         // Increment count after successful call
         incrementLimitCount(model);
@@ -1292,15 +1459,16 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             }
         }
 
-        console.log(`Image response completed from ${model}`);
+        console.log(`[Gemini] Image response completed from ${model}`);
 
         // Save screen analysis to history
         saveScreenAnalysis(prompt, fullText, model);
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
-        console.error('Error sending image to Gemini HTTP:', error);
-        return { success: false, error: error.message };
+        console.error('[Gemini] Error sending image to Gemini HTTP:', error && error.stack ? error.stack : error);
+        const message = (error && (error.message || error.toString())) || 'Unknown error';
+        return { success: false, error: message };
     }
 }
 
@@ -1311,7 +1479,28 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
         return { success: false, error: 'No API key configured' };
     }
 
+    // If caller passed a single image, reuse the single-image path which
+    // is often more robust and avoids passing an array to the HTTP client.
+    if (images.length === 1) {
+        try {
+            console.log('[Gemini] sendMultipleImagesToGeminiHttp: single image detected, delegating to sendImageToGeminiHttp');
+            return await sendImageToGeminiHttp(images[0], prompt);
+        } catch (err) {
+            console.error('[Gemini] delegated single-image send failed:', err && err.stack ? err.stack : err);
+            // fall through to try the multi-image path as a last resort
+        }
+    }
+
     try {
+        console.log('[Gemini] sendMultipleImagesToGeminiHttp', { model, imagesCount: images.length });
+        images.forEach((img, idx) => {
+            try {
+                const size = Buffer.from(img, 'base64').length;
+                console.log(`[Gemini] image[${idx}] size: ${size} bytes`);
+            } catch (e) {
+                console.log(`[Gemini] image[${idx}] size: <unreadable>`);
+            }
+        });
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
         const contents = [
@@ -1321,13 +1510,34 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
             { text: prompt },
         ];
 
-        console.log(`Sending ${images.length} images to ${model} (streaming)...`);
-        const response = await ai.models.generateContentStream({
-            model: model,
-            contents: contents,
-        });
+        // Try model fallbacks similar to single-image path
+        const MODEL_FALLBACKS = [model, 'gemini-1.5', 'gemini-1.5-pro', 'gemini-2.1', 'gemini-2.5-flash-lite'];
+        let response = null;
+        let usedModel = model;
+        for (const candidateModel of MODEL_FALLBACKS) {
+            try {
+                console.log(`Sending ${images.length} images to ${candidateModel} (streaming)...`);
+                response = await ai.models.generateContentStream({ model: candidateModel, contents: contents });
+                usedModel = candidateModel;
+                break;
+            } catch (err) {
+                const msg = err && (err.message || err.toString());
+                console.error(`[Gemini] generateContentStream failed for model ${candidateModel}:`, msg, err && err.stack ? err.stack : err);
+                const isNotFound = msg && msg.toLowerCase().includes('not found') && msg.toLowerCase().includes('model');
+                if (isNotFound) {
+                    console.log(`[Gemini] model ${candidateModel} not available, trying next fallback`);
+                    continue;
+                }
+                // For transient errors, retry next candidate as well
+                continue;
+            }
+        }
 
-        incrementLimitCount(model);
+        if (!response) {
+            throw new Error('No response from Gemini generateContentStream for any candidate models');
+        }
+
+        incrementLimitCount(usedModel);
 
         // Always use update-response — renderer adds a "..." placeholder before invoking
         let fullText = '';
@@ -1344,10 +1554,55 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
-        console.error('Error sending images to Gemini HTTP:', error);
-        return { success: false, error: error.message };
+        console.error('Error sending images to Gemini HTTP:', error && error.stack ? error.stack : error);
+        // Some errors come with nested 'cause' or 'error' fields from the library
+        const message = (error && (error.message || error.toString())) || 'Unknown error';
+        return { success: false, error: message };
     }
 }
+
+// -------------------- follow-up helpers --------------------
+function extractLastAssistantCode() {
+    // look in conversationHistory (most recent assistant turn with a code fence)
+    for (let i = conversationHistory.length - 1; i >= 0; i--) {
+        const turn = conversationHistory[i];
+        if (!turn || !turn.ai_response) continue;
+        const text = turn.ai_response;
+        const fenced = text.match(/```([^\n]*)\n([\s\S]*?)```/);
+        if (fenced) return { lang: fenced[1] || '', code: fenced[2].trim(), source: 'conversation' };
+        const pre = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+        if (pre) return { lang: '', code: pre[1].trim(), source: 'conversation' };
+    }
+    // fallback to last screenAnalysisHistory entry
+    for (let i = screenAnalysisHistory.length - 1; i >= 0; i--) {
+        const entry = screenAnalysisHistory[i];
+        if (!entry || !entry.response) continue;
+        const text = entry.response;
+        const fenced = text.match(/```([^\n]*)\n([\s\S]*?)```/);
+        if (fenced) return { lang: fenced[1] || '', code: fenced[2].trim(), source: 'screenAnalysis' };
+        const pre = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+        if (pre) return { lang: '', code: pre[1].trim(), source: 'screenAnalysis' };
+    }
+    return null;
+}
+
+function looksLikeFollowUpFix() {
+    // Only consider follow-up fixes inside the Interview profile
+    if (currentProfile !== 'interview') return false;
+
+    const lastAssistantHasCode = extractLastAssistantCode();
+    if (!lastAssistantHasCode) return false;
+
+    // If the last assistant turn is too old (>30m) don't assume follow-up
+    const lastTurn = conversationHistory.length ? conversationHistory[conversationHistory.length - 1] : null;
+    if (lastTurn) {
+        const ageMs = Date.now() - (lastTurn.timestamp || Date.now());
+        if (ageMs > 1000 * 60 * 30) return false;
+    }
+
+    return true;
+}
+
 
 function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
