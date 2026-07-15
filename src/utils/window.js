@@ -13,9 +13,12 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         width: windowWidth,
         height: windowHeight,
         frame: false,
+        // On Windows a frameless window needs a thickFrame to allow native resizing
+        thickFrame: process.platform === 'win32',
         transparent: true,
         hasShadow: false,
         alwaysOnTop: true,
+        resizable: true,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false, // TODO: change to true
@@ -45,7 +48,8 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         { useSystemPicker: process.platform !== 'win32' }
     );
 
-    mainWindow.setResizable(false);
+    // Keep the window resizable so programmatic and user-initiated size changes work
+    mainWindow.setResizable(true);
     mainWindow.setContentProtection(true);
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
@@ -102,22 +106,23 @@ function createWindow(sendToRenderer, geminiSessionRef) {
 }
 
 function getDefaultKeybinds() {
-    const isMac = process.platform === 'darwin';
+    // Use CommandOrControl so accelerators are consistent across platforms
+    const primary = 'CommandOrControl';
     return {
-        moveUp: isMac ? 'Alt+Up' : 'Ctrl+Up',
-        moveDown: isMac ? 'Alt+Down' : 'Ctrl+Down',
-        moveLeft: isMac ? 'Alt+Left' : 'Ctrl+Left',
-        moveRight: isMac ? 'Alt+Right' : 'Ctrl+Right',
-        toggleVisibility: isMac ? 'Cmd+\\' : 'Ctrl+\\',
-        toggleClickThrough: isMac ? 'Cmd+M' : 'Ctrl+M',
-        nextStep: isMac ? 'Cmd+Enter' : 'Ctrl+Enter',
-    capture: isMac ? 'Cmd+Shift+C' : 'Ctrl+Shift+C',
-    solve: isMac ? 'Cmd+Shift+S' : 'Ctrl+Shift+S',
-        previousResponse: isMac ? 'Cmd+[' : 'Ctrl+[',
-        nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
-        scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
-        scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
-        emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        moveUp: `Alt+Up`,
+        moveDown: `Alt+Down`,
+        moveLeft: `Alt+Left`,
+        moveRight: `Alt+Right`,
+        toggleVisibility: `${primary}+\\`,
+        toggleClickThrough: `${primary}+M`,
+        nextStep: `${primary}+Enter`,
+        capture: `${primary}+Shift+C`,
+        solve: `${primary}+Shift+S`,
+        previousResponse: `${primary}+[`,
+        nextResponse: `${primary}+]`,
+        scrollUp: `${primary}+Shift+Up`,
+        scrollDown: `${primary}+Shift+Down`,
+        emergencyErase: `${primary}+Shift+E`,
     };
 }
 
