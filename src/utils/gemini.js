@@ -65,6 +65,71 @@ let lastProcessedIntent = '';
 let anthropicQueue = [];
 let anthropicProcessing = false;
 
+const PROGRAMMING_LANGUAGE_PATTERNS = [
+    { language: 'Python', patterns: [/\bpython\b/i, /\bpy\b/i, /def\s+\w+\s*\(/i, /\bprint\s*\(/i] },
+    { language: 'JavaScript', patterns: [/\bjavascript\b/i, /\bjs\b/i, /\bnode(\.js)?\b/i, /\bconsole\.log\s*\(/i, /=>/] },
+    { language: 'TypeScript', patterns: [/\btypescript\b/i, /\bts\b/i, /interface\s+\w+/i, /:\s*(string|number|boolean|unknown|any)\b/i] },
+    { language: 'Java', patterns: [/\bjava\b/i, /public\s+static\s+void\s+main/i, /System\.out\.println\s*\(/i] },
+    { language: 'C++', patterns: [/\bc\+\+\b/i, /#include\s*<\w+>/i, /std::/i, /\bcout\s*<</i] },
+    { language: 'C', patterns: [/\bc language\b/i, /\bc\b/i, /#include\s*<stdio\.h>/i, /printf\s*\(/i] },
+    { language: 'C#', patterns: [/\bc#\b/i, /\bcsharp\b/i, /Console\.WriteLine\s*\(/i, /using\s+System;/i] },
+    { language: 'Go', patterns: [/\bgolang\b/i, /\bgo\b/i, /package\s+main/i, /fmt\.Println\s*\(/i] },
+    { language: 'Rust', patterns: [/\brust\b/i, /fn\s+main\s*\(/i, /println!\s*\(/i] },
+    { language: 'Kotlin', patterns: [/\bkotlin\b/i, /fun\s+main\s*\(/i, /val\s+\w+\s*:/i] },
+    { language: 'Swift', patterns: [/\bswift\b/i, /import\s+Foundation/i, /print\s*\(/i] },
+    { language: 'Ruby', patterns: [/\bruby\b/i, /\brb\b/i, /puts\s+['"]/i, /def\s+\w+/i] },
+    { language: 'PHP', patterns: [/\bphp\b/i, /<\?php/i, /echo\s+['"]/i] },
+];
+
+function looksLikeCodingExercise(text = '') {
+    const t = (text || '').toLowerCase();
+    if (!t) return false;
+    return [
+        'leetcode', 'hackerrank', 'coding challenge', 'algorithm', 'data structure',
+        'time complexity', 'space complexity', 'implement', 'write a function',
+        'write code', 'solve this', 'array', 'string', 'binary tree', 'linked list',
+        'dynamic programming', 'dfs', 'bfs', 'two pointers', 'sliding window'
+    ].some(k => t.includes(k));
+}
+
+function detectProgrammingLanguage(inputText = '', history = []) {
+    const candidates = [inputText];
+
+    // Include last few turns to preserve previously chosen language.
+    if (Array.isArray(history) && history.length) {
+        for (let i = history.length - 1; i >= 0 && candidates.length < 6; i--) {
+            const msg = history[i];
+            if (msg && msg.role === 'user' && typeof msg.content === 'string') {
+                candidates.push(msg.content);
+            }
+        }
+    }
+
+    for (const text of candidates) {
+        if (!text) continue;
+        for (const rule of PROGRAMMING_LANGUAGE_PATTERNS) {
+            if (rule.patterns.some(p => p.test(text))) {
+                return { language: rule.language, source: text === inputText ? 'current-question' : 'recent-context' };
+            }
+        }
+    }
+
+    return { language: null, source: 'none' };
+}
+
+function buildLanguageLockInstruction(questionText, history = []) {
+    if (!looksLikeCodingExercise(questionText)) {
+        return null;
+    }
+
+    const detected = detectProgrammingLanguage(questionText, history);
+    if (detected.language) {
+        return `LANGUAGE LOCK: The programming language is ${detected.language} (detected from ${detected.source}). Answer this coding exercise using ONLY ${detected.language} syntax and idioms.`;
+    }
+
+    return 'LANGUAGE LOCK: Language is ambiguous. Infer from explicit prompt constraints first, then from visible code syntax. If still ambiguous, ask one short clarification question for language before providing code.';
+}
+
 function cancelSilenceTimer() {
     if (transcriptionSilenceTimer) {
         clearTimeout(transcriptionSilenceTimer);
@@ -504,6 +569,10 @@ async function sendToGroq(transcription) {
 
     const questionToAnswer = intent;
     const assumptionPrefix = '';
+    const languageLockInstruction = buildLanguageLockInstruction(questionToAnswer, groqConversationHistory);
+    const questionForModel = languageLockInstruction
+        ? `${questionToAnswer}\n\n${languageLockInstruction}`
+        : questionToAnswer;
 
     const modelToUse = getModelForToday();
     if (!modelToUse) {
@@ -516,7 +585,7 @@ async function sendToGroq(transcription) {
 
     groqConversationHistory.push({
         role: 'user',
-        content: questionToAnswer.trim()
+        content: questionForModel.trim()
     });
 
     if (groqConversationHistory.length > 20) {
@@ -642,9 +711,14 @@ async function sendToGemma(transcription) {
 
     console.log('Sending to Gemma:', transcription.substring(0, 100) + '...');
 
+    const languageLockInstruction = buildLanguageLockInstruction(transcription.trim(), groqConversationHistory);
+    const questionForModel = languageLockInstruction
+        ? `${transcription.trim()}\n\n${languageLockInstruction}`
+        : transcription.trim();
+
     groqConversationHistory.push({
         role: 'user',
-        content: transcription.trim()
+        content: questionForModel
     });
 
     const trimmedHistory = trimConversationHistoryForGemma(groqConversationHistory, 42000);
@@ -777,8 +851,12 @@ async function sendToAnthropic(transcription) {
     lastProcessedIntent = intent;
 
     const questionToAnswer = intent;
+    const languageLockInstruction = buildLanguageLockInstruction(questionToAnswer, groqConversationHistory);
+    const questionForModel = languageLockInstruction
+        ? `${questionToAnswer}\n\n${languageLockInstruction}`
+        : questionToAnswer;
 
-    groqConversationHistory.push({ role: 'user', content: questionToAnswer.trim() });
+    groqConversationHistory.push({ role: 'user', content: questionForModel.trim() });
     if (groqConversationHistory.length > 20) {
         groqConversationHistory = groqConversationHistory.slice(-20);
     }

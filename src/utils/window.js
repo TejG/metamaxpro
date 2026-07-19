@@ -4,10 +4,35 @@ const storage = require('../storage');
 
 let mouseEventsIgnored = false;
 
+// Single source of truth for app window sizing
+const WINDOW_SIZES = {
+    normal: { width: 900, height: 650 },
+    live: { width: 850, height: 400 },
+};
+
+function getMainWindowSizeByView(view = 'main') {
+    return view === 'assistant' ? WINDOW_SIZES.live : WINDOW_SIZES.normal;
+}
+
+function applyMainWindowSize(mainWindow, view = 'main') {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const { width, height } = getMainWindowSizeByView(view);
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth } = primaryDisplay.workAreaSize;
+    const x = Math.floor((screenWidth - width) / 2);
+
+    mainWindow.setSize(width, height);
+    mainWindow.setPosition(x, 0);
+
+    // Ensure the window can still be resized by users, but starts from our intended size.
+    mainWindow.setMinimumSize(Math.min(width, 100), Math.min(height, 150));
+}
+
 function createWindow(sendToRenderer, geminiSessionRef) {
     // Get layout preference (default to 'normal')
-    let windowWidth = 1100;
-    let windowHeight = 800;
+    let windowWidth = WINDOW_SIZES.normal.width;
+    let windowHeight = WINDOW_SIZES.normal.height;
 
     const mainWindow = new BrowserWindow({
         width: windowWidth,
@@ -83,6 +108,12 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     }
 
     mainWindow.loadFile(path.join(__dirname, '../index.html'));
+
+    // Re-apply intended startup size once the window is fully ready.
+    // This avoids stale OS-restored bounds making the launch size appear unchanged.
+    mainWindow.once('ready-to-show', () => {
+        applyMainWindowSize(mainWindow, 'main');
+    });
 
     // After window is created, initialize keybinds
     mainWindow.webContents.once('dom-ready', () => {
@@ -233,43 +264,6 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
-    // Register capture shortcut
-    if (keybinds.capture) {
-        try {
-            globalShortcut.register(keybinds.capture, async () => {
-                console.log('Capture shortcut triggered');
-                try {
-                    const isMac = process.platform === 'darwin';
-                    const shortcutKey = 'c';
-                    mainWindow.webContents.executeJavaScript(`metaMaxPro.handleShortcut('${shortcutKey}');`);
-                } catch (error) {
-                    console.error('Error handling capture shortcut:', error);
-                }
-            });
-            console.log(`Registered capture: ${keybinds.capture}`);
-        } catch (error) {
-            console.error(`Failed to register capture (${keybinds.capture}):`, error);
-        }
-    }
-
-    // Register solve shortcut
-    if (keybinds.solve) {
-        try {
-            globalShortcut.register(keybinds.solve, async () => {
-                console.log('Solve shortcut triggered');
-                try {
-                    const shortcutKey = 's';
-                    mainWindow.webContents.executeJavaScript(`metaMaxPro.handleShortcut('${shortcutKey}');`);
-                } catch (error) {
-                    console.error('Error handling solve shortcut:', error);
-                }
-            });
-            console.log(`Registered solve: ${keybinds.solve}`);
-        } catch (error) {
-            console.error(`Failed to register solve (${keybinds.solve}):`, error);
-        }
-    }
-
     // Register previous response shortcut
     if (keybinds.previousResponse) {
         try {
@@ -353,6 +347,7 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
 function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     // ── Teleprompter Window ─────────────────────────────────────
     let teleprompterWindow = null;
+    let currentView = 'main';
 
     ipcMain.on('open-gaze-window', () => {
         if (teleprompterWindow && !teleprompterWindow.isDestroyed()) {
@@ -408,23 +403,14 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     // ── View / layout changes ───────────────────────────────────
     ipcMain.on('view-changed', (event, view) => {
         if (!mainWindow.isDestroyed()) {
-            const primaryDisplay = screen.getPrimaryDisplay();
-            const { width: screenWidth } = primaryDisplay.workAreaSize;
+            currentView = view || 'main';
 
             if (view === 'assistant') {
                 // Shrink window for live view
-                const liveWidth = 850;
-                const liveHeight = 400;
-                const x = Math.floor((screenWidth - liveWidth) / 2);
-                mainWindow.setSize(liveWidth, liveHeight);
-                mainWindow.setPosition(x, 0);
+                applyMainWindowSize(mainWindow, 'assistant');
             } else {
                 // Restore full size
-                const fullWidth = 1100;
-                const fullHeight = 800;
-                const x = Math.floor((screenWidth - fullWidth) / 2);
-                mainWindow.setSize(fullWidth, fullHeight);
-                mainWindow.setPosition(x, 0);
+                applyMainWindowSize(mainWindow, 'main');
                 mainWindow.setIgnoreMouseEvents(false);
             }
         }
@@ -461,8 +447,9 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     });
 
     ipcMain.handle('update-sizes', async event => {
-        // With the sidebar layout, the window size is user-controlled.
-        // This handler is kept for compatibility but is a no-op now.
+        // Re-apply current view size to keep renderer-side layout updates in sync
+        // with the actual BrowserWindow dimensions.
+        applyMainWindowSize(mainWindow, currentView);
         return { success: true };
     });
 }

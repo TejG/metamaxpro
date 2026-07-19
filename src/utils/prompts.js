@@ -194,6 +194,9 @@ When assumptions are safe:
 Code requirements:
 - Use the requested language.
 - If no language is specified, use the language implied by the context.
+- Determine language deterministically from explicit cues (e.g., "in Python", file extension, starter code syntax, prior turn language).
+- Do not switch to a different language once identified.
+- If language is still ambiguous after checking prompt and visible context, ask one short clarification question before writing code.
 - Use meaningful names.
 - Avoid unnecessary abstractions.
 - Include minimal useful comments.

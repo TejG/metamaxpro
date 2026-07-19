@@ -24,10 +24,10 @@ export class MainView extends LitElement {
             display: flex;
             flex-direction: column;
             gap: var(--space-md);
-            background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+            // background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
             border-radius: 20px;
             padding: 12px 14px 8px 14px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+            //box-shadow: 0 10px 30px rgba(0,0,0,0.35);
             -webkit-app-region: no-drag;
         }
 
@@ -512,14 +512,14 @@ export class MainView extends LitElement {
             padding: 12px 14px;
             border-radius: var(--radius-md);
             border: 1px solid var(--border);
-            background: var(--bg-elevated);
+            //background: var(--bg-elevated);
             cursor: pointer;
             transition: border-color 0.2s, background 0.2s;
         }
 
         .mode-card:hover {
             border-color: var(--text-muted);
-            background: var(--bg-hover);
+            //background: var(--bg-hover);
         }
 
         .mode-card-title {

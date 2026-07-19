@@ -779,18 +779,6 @@ export class AssistantView extends LitElement {
         }
     }
 
-    // Allow programmatic shortcuts from main via metaMaxPro.handleShortcut -> executeJavaScript
-    handleShortcut(shortcutKey) {
-        // Accept 'cmd+enter' / 'ctrl+enter' already handled elsewhere
-        const k = (shortcutKey || '').toLowerCase();
-        if (k === 'capture' || k === 'c') {
-            this.handleCaptureScreenshot();
-        }
-        if (k === 'solve' || k === 's') {
-            this.handleScreenAnswer();
-        }
-    }
-
     async handleSendText() {
         const textInput = this.shadowRoot.querySelector('#textInput');
         if (textInput && textInput.value.trim()) {
