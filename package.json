@@ -1,7 +1,7 @@
 {
     "name": "metaquest",
     "productName": "MetaQuest",
-    "version": "0.10.4",
+    "version": "0.10.5",
     "description": "MetaQuest",
     "main": "src/index.js",
     "scripts": {
