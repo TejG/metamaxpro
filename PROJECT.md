@@ -136,6 +136,53 @@ TARGET JOB DESCRIPTION:
 
 ---
 
+### ADR-009: Two-shortcut model for on-screen questions (Answer Now + Add Screen)
+**Decision:** Screenshot-based solving is driven by two **global** shortcuts instead of the old (half-wired) Capture/Solve pair:
+- **Answer Now** — `Cmd/Ctrl+Enter` (`nextStep`). In `main` view it starts the session; in `assistant` view it delegates to `AssistantView.handleScreenAnswer()`, which analyses the buffered screens if any were added, otherwise the current frame.
+- **Add Screen** — `Cmd/Ctrl+Shift+Enter` (`addScreen`). Delegates to `AssistantView.handleCaptureScreenshot()`, pushing the current frame into the `capturedScreenshots` buffer (with a count badge) without analysing yet.
+
+**Why:** A single screenshot only captures one viewport, so long/multi-screen questions (LeetCode problems, specs) lost everything below the fold. The multi-screenshot buffer already existed but was exposed as two co-equal buttons and its shortcuts (`Cmd+Shift+C/S`) were **never registered** in `updateGlobalShortcuts()` — so they only worked via a window-focused keydown listener, useless during a real interview when another app has focus. Collapsing to one primary "answer" key + one optional "add screen" key keeps the fast <2s path for simple questions while making long questions a natural scroll→add→scroll→add→answer flow.
+
+**Consequences / fixes rolled in:**
+- Both shortcuts are now registered as real global accelerators in `window.js` and routed through `handleShortcut()`, which reaches the live `<assistant-view>` via the app root's shadow DOM so the badge / analyzing state update.
+- `Cmd+Enter` no longer discards the capture buffer (old bug: it took a lone fresh frame).
+- `handleScreenAnswer()` wraps its work in `try/finally` so `isAnalyzing` can never get stuck when capture fails before a response is added (no media stream / blank frame).
+- Removed the over-eager plain `c`/`s` window-focused handlers; the local keydown listener now only handles `Cmd/Ctrl+Shift+K` (copy code block).
+- Solve-path capture resolution bumped (`MAX_WIDTH` 1280→1600, medium JPEG quality 0.6→0.75) for legibility of dense code/text.
+
+**Status:** ✅ Implemented 2026-07-20. `window.js`, `renderer.js` (`handleShortcut`, `_getAssistantView`, `_captureFrameAsBase64`), `AssistantView.js`, `HelpView.js`.
+
+---
+
+### ADR-010: Context-aware, multi-provider screenshot solving
+**Decision:** The screenshot/solve path now (a) carries full session context and (b) works across every provider, not just Gemini BYOK.
+
+**Context-awareness:** `sendImageToGeminiHttp` / `sendMultipleImagesToGeminiHttp` inject `currentSystemPrompt` (persona + resume + JD + human-tone rules) as Gemini `systemInstruction` and the last 8 turns of `groqConversationHistory` as prior `contents`. The `MANUAL_SCREENSHOT_PROMPT` non-coding branch answers in-character (first person, grounded, spoken-style). After each solve, `recordScreenTurnInHistory()` pushes the exchange back into `groqConversationHistory` so later audio turns stay coherent. Coding screenshots keep the judge-safe *Type this / say out loud / complexity / edge cases* format (see the prompt in `renderer.js`).
+
+**Multi-provider routing:** `send-image-content` / `send-multiple-images-content` handle cloud and local as before, then delegate to `routeImagesToProvider()`:
+- `anthropic` mode → `sendImagesToAnthropic()` (Claude vision, `claude-sonnet-4-6`, streaming, context-aware).
+- `whisper` mode → Gemini HTTP if a Gemini key exists, else Claude vision if an Anthropic key exists, else Groq vision (`sendImagesToGroqVision`, best-effort), else a clear "add a vision key" error.
+- `byok` (default) → Gemini HTTP.
+
+**Also fixed (ADR-005-adjacent):** `getAvailableModel()` / the image fallback list used invalid Gemini IDs (`gemini-1.5`, `gemini-2.1`); now `gemini-2.5-flash → 2.5-flash-lite → 2.0-flash → 2.5-pro`. `getAvailableModel()` also now increments the daily usage counters correctly.
+
+**Status:** ✅ Implemented 2026-07-20. `gemini.js` (`buildImageRequest`, `recentHistoryAsGeminiContents`, `recordScreenTurnInHistory`, `sendImagesToAnthropic`, `sendImagesToGroqVision`, `routeImagesToProvider`), `renderer.js` (`MANUAL_SCREENSHOT_PROMPT`), `storage.js` (`getAvailableModel`).
+
+---
+
+### ADR-011: Chat-style UI, Settings hub, and minimize-to-mascot
+**Decision:** Reworked the app shell around a single chat surface and consolidated navigation.
+
+- **Home = chat** (`assistant` view, `MetaMaxProApp` boots here and auto-calls `handleStart()`). If no provider is configured, `handleStart` bails and the chat shows a "Session not started · ▶ Start · ⚙" banner. `AssistantView` now renders the full `responses[]` as a scrollable, markdown, auto-scrolling transcript (bubbles) instead of one-response-with-nav; the input row sits below it with a compact controls row: **Profile dropdown · Add screen · Analyze · Settings gear**.
+- **Settings hub** (`customize` view): a link row (Profile / History / Help & Feedback) above the preferences form. The gear opens it; sub-pages' back buttons return to Settings. The old MainView bottom-nav is gone (MainView is no longer reached; `renderSidebar` was already dead code).
+- **AI → Profile** rename; **Feedback merged into Help** (`help` case renders `<help-view>` + `<feedback-view>`; the `feedback` view/route removed).
+- **History (#1 fix)**: `HistoryView` now shows one chronological **Transcript** tab merging `conversationHistory` (audio/typed) + `screenAnalysisHistory` (screen/code solves), rendered as markdown (code answers were being saved all along in `screenAnalysisHistory` — they were just siloed in a raw-text "Screen" tab).
+- **Minimize-to-mascot (#2.e)**: the live-bar `[minimize]` control calls `minimize-to-mascot` → `mainWindow.hide()` (off taskbar) + a small frameless, transparent, always-on-top, `skipTaskbar` mascot window (`src/mascot.html`, `max.svg`, ~84×104). Drag to move (`mascot-drag` IPC moves the window by deltas); a near-stationary click calls `restore-from-mascot` → shows the main window and closes the mascot. The audio session keeps running while minimized.
+
+**Status:** ✅ Implemented 2026-07-20. `MetaMaxProApp.js`, `AssistantView.js`, `HistoryView.js`, `window.js`, new `src/mascot.html`.
+
+---
+
 ## Known Issues / Active Bugs
 
 | # | Issue | Root Cause | Fix |

@@ -22,13 +22,108 @@ export class AssistantView extends LitElement {
             line-height: var(--line-height);
             background: var(--bg-app);
             padding: var(--space-sm) var(--space-md);
-            /* Reserve space at the bottom for the nav + bookmarks + input bar so
-               the last response is never hidden under controls */
-            padding-bottom: 140px;
+            padding-bottom: var(--space-md);
             scroll-behavior: smooth;
             user-select: text;
             cursor: pointer;
             color: var(--text-primary);
+        }
+
+        /* ── Chat transcript bubbles ── */
+        .chat-row {
+            display: flex;
+            margin: 8px 0;
+        }
+        .chat-row.left { justify-content: flex-start; }
+        .chat-row.right { justify-content: flex-end; }
+        .chat-msg {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 8px 12px;
+            max-width: 82%;
+            word-break: break-word;
+        }
+        /* Transcribed audio / typed question — left */
+        .chat-msg.question {
+            background: var(--bg-surface, var(--bg-elevated));
+            color: var(--text-secondary);
+            border-bottom-left-radius: 4px;
+            white-space: pre-wrap;
+        }
+        /* AI answer — right */
+        .chat-msg.answer {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border-bottom-right-radius: 4px;
+        }
+        .chat-empty {
+            color: var(--text-muted);
+            font-size: var(--font-size-sm, 13px);
+            padding: var(--space-md);
+            text-align: center;
+        }
+
+        /* ── Compact control row under the input ── */
+        .controls-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+        .controls-spacer { flex: 1; }
+        .profile-select {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: 100px;
+            height: 32px;
+            padding: 0 10px;
+            font-size: var(--font-size-xs, 12px);
+            font-family: var(--font);
+            cursor: pointer;
+            flex: 0 0 auto;
+        }
+        .gear-btn, .send-btn {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: 100px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex: 0 0 auto;
+            transition: border-color var(--transition), background var(--transition);
+        }
+        .gear-btn:hover, .send-btn:hover:not(:disabled) {
+            border-color: var(--accent);
+            background: var(--bg-surface);
+        }
+        .send-btn:disabled { opacity: 0.4; cursor: default; }
+
+        /* ── Not-started banner ── */
+        .start-banner {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            margin: 0 var(--space-md);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md, 10px);
+            background: var(--bg-elevated);
+        }
+        .start-banner-text { color: var(--text-secondary); font-size: var(--font-size-sm, 13px); flex: 1; }
+        .start-inline-btn {
+            background: var(--btn-primary-bg, var(--accent));
+            color: var(--btn-primary-text, var(--bg-app));
+            border: none;
+            border-radius: 100px;
+            padding: 6px 14px;
+            font-size: var(--font-size-xs, 12px);
+            cursor: pointer;
         }
 
         .response-container * {
@@ -354,11 +449,25 @@ export class AssistantView extends LitElement {
 
         .input-bar {
             display: flex;
-            align-items: center;
-            gap: var(--space-sm);
-            padding: var(--space-md);
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0;
+            padding: var(--space-sm) var(--space-md) var(--space-md);
             background: var(--bg-app);
-            flex-wrap: nowrap; /* keep children on a single row */
+            border-top: 1px solid var(--border);
+        }
+
+        /* Send button sits inside the input pill, borderless */
+        .input-bar-inner .send-btn {
+            border: none;
+            background: none;
+            width: 28px;
+            height: 28px;
+            color: var(--text-muted);
+        }
+        .input-bar-inner .send-btn:hover:not(:disabled) {
+            color: var(--accent);
+            background: none;
         }
 
         .input-bar-inner {
@@ -526,6 +635,9 @@ export class AssistantView extends LitElement {
         selectedProfile: { type: String },
         sessionActive: { type: Boolean },
         onSendText: { type: Function },
+        onProfileChange: { type: Function },
+        onStart: { type: Function },
+        onOpenSettings: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
         capturedCount: { type: Number, state: true },
@@ -538,11 +650,20 @@ export class AssistantView extends LitElement {
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
+        this.onProfileChange = () => {};
+        this.onStart = () => {};
+        this.onOpenSettings = () => {};
         this.sessionActive = false;
         this.isAnalyzing = false;
         this.capturedCount = 0;
         this.gazeWindowOpen = false;
         this._animFrame = null;
+    }
+
+    _onProfileChange(e) {
+        const val = e.target.value;
+        this.selectedProfile = val;
+        if (this.onProfileChange) this.onProfileChange(val);
     }
 
     getProfileNames() {
@@ -747,8 +868,16 @@ export class AssistantView extends LitElement {
         }
     }
 
+    _modLabel() {
+        const isMac = (window.metaMaxPro && window.metaMaxPro.isMacOS) || navigator.platform.toUpperCase().includes('MAC');
+        return isMac ? 'Cmd' : 'Ctrl';
+    }
+
     /**
-     * Global key handler for shortcuts: C = capture, S = solve/analyze
+     * Local (window-focused) key handler. Capture ("add screen") and answer
+     * ("analyze/solve") are driven by the GLOBAL shortcuts (Cmd/Ctrl+Shift+Enter
+     * and Cmd/Ctrl+Enter) so they work even when another app has focus. Here we
+     * only handle the code-copy convenience shortcut.
      */
     _handleKeydownGlobal(e) {
         // Ignore when user is typing in the text input
@@ -756,20 +885,6 @@ export class AssistantView extends LitElement {
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
 
         const key = e.key.toLowerCase();
-        // Support Cmd/Ctrl + Shift + C / S as well as plain C/S
-        const modifier = e.metaKey || e.ctrlKey;
-
-        if (key === 'c' && (!modifier || e.shiftKey)) {
-            e.preventDefault();
-            this.handleCaptureScreenshot();
-            return;
-        }
-
-        if (key === 's' && (!modifier || e.shiftKey)) {
-            e.preventDefault();
-            this.handleScreenAnswer();
-            return;
-        }
 
         // Copy first code block: Cmd/Ctrl+Shift+K
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && key === 'k') {
@@ -841,11 +956,21 @@ export class AssistantView extends LitElement {
         this.isAnalyzing = true;
         this._responseCountWhenStarted = this.responses.length;
 
-        if (this.capturedCount > 0 && window.analyzeWithCapturedScreenshots) {
-            await window.analyzeWithCapturedScreenshots();
-            this.capturedCount = 0;
-        } else if (window.captureManualScreenshot) {
-            window.captureManualScreenshot();
+        try {
+            if (this.capturedCount > 0 && window.analyzeWithCapturedScreenshots) {
+                await window.analyzeWithCapturedScreenshots();
+                this.capturedCount = 0;
+            } else if (window.captureManualScreenshot) {
+                await window.captureManualScreenshot();
+            }
+        } catch (err) {
+            console.error('Screen answer failed:', err);
+        } finally {
+            // Safety net: never leave the button stuck in the analyzing state,
+            // even if capture failed before any response was added (e.g. no
+            // media stream / blank frame). The responses-growth watcher in
+            // updated() also clears this on success.
+            this.isAnalyzing = false;
         }
     }
 
@@ -1024,9 +1149,36 @@ export class AssistantView extends LitElement {
     updateResponseContent() {
         const container = this.shadowRoot.querySelector('#responseContainer');
         if (container) {
-            const currentResponse = this.getCurrentResponse();
-            const renderedResponse = this.renderMarkdown(currentResponse);
-            container.innerHTML = renderedResponse;
+            // Render the full session as a scrollable chat transcript. Each AI
+            // answer (audio, typed, or screen/code solve) is its own bubble.
+            if (!this.responses || this.responses.length === 0) {
+                const profileNames = this.getProfileNames();
+                const idle = this.sessionActive
+                    ? `Listening to your ${profileNames[this.selectedProfile] || 'session'}… ask a question, type, or Analyze your screen.`
+                    : 'Start a session to begin. Answers will appear here.';
+                container.innerHTML = `<div class="chat-empty">${idle}</div>`;
+                return;
+            }
+
+            // Keep the view pinned to the bottom only if already near it.
+            const nearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
+
+            const esc = (t) => (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            container.innerHTML = this.responses
+                .map((resp, i) => {
+                    // Back-compat: older entries may be bare strings (treated as answers).
+                    const role = (resp && typeof resp === 'object') ? resp.role : 'answer';
+                    const text = (resp && typeof resp === 'object') ? resp.text : resp;
+                    if (role === 'question') {
+                        return `<div class="chat-row left"><div class="chat-msg question" data-idx="${i}">${esc(text)}</div></div>`;
+                    }
+                    return `<div class="chat-row right"><div class="chat-msg answer" data-idx="${i}">${this.renderMarkdown(text)}</div></div>`;
+                })
+                .join('');
+
+            // Latest answer text (for the teleprompter mirror below)
+            const lastAnswer = [...this.responses].reverse().find(r => (r && typeof r === 'object' ? r.role === 'answer' : true));
+            const currentResponse = lastAnswer ? (typeof lastAnswer === 'object' ? lastAnswer.text : lastAnswer) : '';
 
             // Push plain text to teleprompter window if open
             if (this.gazeWindowOpen && currentResponse && window.require) {
@@ -1081,6 +1233,11 @@ export class AssistantView extends LitElement {
 
             // After rendering, add copy buttons to code blocks
             this._attachCopyButtons(container);
+
+            // Auto-scroll to the newest answer if the user was already at the bottom
+            if (nearBottom) {
+                container.scrollTop = container.scrollHeight;
+            }
         }
     }
 
@@ -1141,95 +1298,69 @@ export class AssistantView extends LitElement {
     }
 
     render() {
-        const hasPrev = this.currentResponseIndex > 0;
-        const hasNext = this.currentResponseIndex < this.responses.length - 1;
-        const showNav = this.responses.length > 0;
-        const bookmarks = this.getBookmarks();
+        const profileNames = this.getProfileNames();
 
         return html`
             <div class="response-container" id="responseContainer"></div>
 
-            ${this.sessionActive && showNav ? html`
-            <div class="response-nav">
-                <!-- Previous -->
-                <button
-                    class="nav-btn"
-                    ?disabled=${!hasPrev}
-                    @click=${this.navigateToPreviousResponse}
-                    title="Previous response"
-                    aria-label="Previous response"
-                >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="15 18 9 12 15 6"/>
-                    </svg>
-                </button>
-
-                <!-- Counter between arrows to show current index -->
-                <div class="response-counter">${this.responses.length ? `${this.currentResponseIndex + 1} / ${this.responses.length}` : ''}</div>
-
-                <!-- Next -->
-                <button
-                    class="nav-btn"
-                    ?disabled=${!hasNext}
-                    @click=${this.navigateToNextResponse}
-                    title="Next response"
-                    aria-label="Next response"
-                >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="9 18 15 12 9 6"/>
-                    </svg>
+            ${!this.sessionActive ? html`
+            <div class="start-banner">
+                <span class="start-banner-text">Session not started.</span>
+                <button class="start-inline-btn" @click=${() => this.onStart && this.onStart()}>▶ Start</button>
+                <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"/><circle cx="12" cy="12" r="3"/></g></svg>
                 </button>
             </div>
             ` : ''}
 
-            ${this.sessionActive && bookmarks.length > 0 ? html`
-            <div class="bookmark-strip">
-                <span class="bookmark-strip-label">Jump to:</span>
-                ${bookmarks.map(bm => html`
-                    <button
-                        class="bookmark-chip type-${bm.type} ${this.currentResponseIndex === bm.index ? 'active' : ''}"
-                        @click=${() => this.navigateToResponse(bm.index)}
-                        title="Jump to response ${bm.index + 1}"
-                    >
-                        ${bm.type === 'diagram' ? '📊' : '💻'} ${bm.label}
-                    </button>
-                `)}
-            </div>
-            ` : ''}
-
-            ${this.sessionActive ? html`
             <div class="input-bar">
                 <div class="input-bar-inner">
                     <input
                         type="text"
                         id="textInput"
-                        placeholder="Type a message..."
+                        placeholder=${this.sessionActive ? 'Type a message…  (Enter to send)' : 'Start a session to chat…'}
+                        ?disabled=${!this.sessionActive}
                         @keydown=${this.handleTextKeydown}
                     />
+                    <button class="send-btn" @click=${this.handleSendText} ?disabled=${!this.sessionActive} title="Send (Enter)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    </button>
                 </div>
-                <button
-                    class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
-                    @click=${this.handleCaptureScreenshot}
-                    title="Capture screenshot (click multiple times to capture the full question, then click Solve)"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/>
-                        <circle cx="12" cy="13" r="3"/>
-                    </svg>
-                    Capture
-                    ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
-                </button>
-                <button class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}" @click=${this.handleScreenAnswer}>
-                    <canvas class="analyze-canvas"></canvas>
-                    <span class="analyze-btn-content">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-                            <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" />
+                <div class="controls-row">
+                    <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
+                        ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
+                    </select>
+                    <button
+                        class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
+                        @click=${this.handleCaptureScreenshot}
+                        title="Add screen (${this._modLabel()}+Shift+Enter) — stack multiple screens for a long question, then Analyze/Solve"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/>
+                            <circle cx="12" cy="13" r="3"/>
                         </svg>
-                        ${this.capturedCount > 0 ? 'Solve' : 'Analyze Screen'}
-                    </span>
-                </button>
+                        Add screen
+                        ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
+                    </button>
+                    <button
+                        class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
+                        @click=${this.handleScreenAnswer}
+                        title="${this.capturedCount > 0 ? `Solve ${this.capturedCount} captured screen(s)` : 'Analyze the current screen'} (${this._modLabel()}+Enter)"
+                    >
+                        <canvas class="analyze-canvas"></canvas>
+                        <span class="analyze-btn-content">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+                                <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" />
+                            </svg>
+                            ${this.capturedCount > 0 ? `Solve (${this.capturedCount})` : 'Analyze Screen'}
+                        </span>
+                    </button>
+                    <span class="controls-spacer"></span>
+                    <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"/><circle cx="12" cy="12" r="3"/></g></svg>
+                    </button>
+                </div>
             </div>
-            ` : ''}
         `;
     }
 }

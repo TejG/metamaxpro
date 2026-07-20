@@ -186,6 +186,25 @@ export class HistoryView extends LitElement {
                 white-space: pre-wrap;
             }
 
+            /* Markdown-rendered bodies manage their own block spacing */
+            .message-body.md-body {
+                white-space: normal;
+            }
+            .message-body.md-body pre {
+                white-space: pre;
+                overflow-x: auto;
+                background: var(--bg-app);
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                padding: 8px;
+                margin: 6px 0;
+                font-size: 12px;
+            }
+            .message-body.md-body code {
+                font-family: var(--font-mono, monospace);
+            }
+            .message-body.md-body p { margin: 4px 0; }
+
             .message-meta {
                 font-size: 10px;
                 margin-top: 4px;
@@ -273,7 +292,7 @@ export class HistoryView extends LitElement {
         this.selectedSession = null;
         this.selectedSessionId = null;
         this.loading = true;
-        this.activeTab = 'conversation';
+        this.activeTab = 'transcript';
         this.searchQuery = '';
         this.loadSessions();
     }
@@ -297,7 +316,7 @@ export class HistoryView extends LitElement {
             if (session) {
                 this.selectedSession = session;
                 this.selectedSessionId = sessionId;
-                this.activeTab = 'conversation';
+                this.activeTab = 'transcript';
                 this.requestUpdate();
             }
         } catch (error) {
@@ -308,7 +327,7 @@ export class HistoryView extends LitElement {
     closeSession() {
         this.selectedSession = null;
         this.selectedSessionId = null;
-        this.activeTab = 'conversation';
+        this.activeTab = 'transcript';
     }
 
     handleSearchInput(e) {
@@ -380,30 +399,47 @@ export class HistoryView extends LitElement {
         return messages;
     }
 
+    // One chronological transcript: audio Q&A + screen/code solves, sorted by time.
+    collectTranscript(session) {
+        const messages = this.collectConversation(session);
+        const screen = session.screenAnalysisHistory || [];
+        screen.forEach(entry => {
+            messages.push({ type: 'screen', content: entry.response || '', timestamp: entry.timestamp });
+        });
+        return messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    }
+
+    // Render markdown (so code answers show as formatted code, not raw backticks).
+    renderMarkdownSafe(text) {
+        const raw = text || '';
+        if (typeof window !== 'undefined' && window.marked) {
+            try { return window.marked.parse(raw); } catch (_) { /* fall through */ }
+        }
+        return raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    updated(changed) {
+        super.updated?.(changed);
+        // Inject markdown into transcript bodies (data-raw holds the source text).
+        const bodies = this.shadowRoot?.querySelectorAll?.('.md-body');
+        bodies?.forEach(el => {
+            el.innerHTML = this.renderMarkdownSafe(el.getAttribute('data-raw'));
+        });
+    }
+
     renderTabContent() {
         if (!this.selectedSession) return html`<div class="empty">Select a session.</div>`;
 
-        if (this.activeTab === 'conversation') {
-            const messages = this.collectConversation(this.selectedSession);
+        if (this.activeTab === 'transcript') {
+            const messages = this.collectTranscript(this.selectedSession);
             if (!messages.length) return html`<div class="empty">No conversation data.</div>`;
             return messages.map(msg => html`
                 <div class="message-row ${msg.type}">
                     <div class="message">
-                        <div class="message-body">${msg.content}</div>
-                        <div class="message-meta">${this.formatTime(msg.timestamp)}</div>
-                    </div>
-                </div>
-            `);
-        }
-
-        if (this.activeTab === 'screen') {
-            const screen = this.selectedSession.screenAnalysisHistory || [];
-            if (!screen.length) return html`<div class="empty">No screen analysis data.</div>`;
-            return screen.map(entry => html`
-                <div class="message-row screen">
-                    <div class="message">
-                        <div class="message-body">${entry.response || ''}</div>
-                        <div class="message-meta">${this.formatTime(entry.timestamp)}</div>
+                        ${msg.type === 'user'
+                            ? html`<div class="message-body">${msg.content}</div>`
+                            : html`<div class="message-body md-body" data-raw=${msg.content}></div>`}
+                        <div class="message-meta">${msg.type === 'screen' ? 'Screen · ' : ''}${this.formatTime(msg.timestamp)}</div>
                     </div>
                 </div>
             `);
@@ -467,8 +503,7 @@ export class HistoryView extends LitElement {
     }
 
     renderDetailView() {
-        const conversationCount = this.collectConversation(this.selectedSession).length;
-        const screenCount = this.selectedSession?.screenAnalysisHistory?.length || 0;
+        const transcriptCount = this.collectTranscript(this.selectedSession).length;
 
         return html`
             <div class="page-title">Session Detail</div>
@@ -481,11 +516,8 @@ export class HistoryView extends LitElement {
                 <span class="detail-info">${this._getProfileLabel(this.selectedSession)} · ${this.formatDate(this.selectedSession.createdAt)} · ${this.formatTime(this.selectedSession.createdAt)}</span>
             </div>
             <div class="tab-row">
-                <button class="tab-btn ${this.activeTab === 'conversation' ? 'active' : ''}" @click=${() => { this.activeTab = 'conversation'; }}>
-                    Conversation (${conversationCount})
-                </button>
-                <button class="tab-btn ${this.activeTab === 'screen' ? 'active' : ''}" @click=${() => { this.activeTab = 'screen'; }}>
-                    Screen (${screenCount})
+                <button class="tab-btn ${this.activeTab === 'transcript' ? 'active' : ''}" @click=${() => { this.activeTab = 'transcript'; }}>
+                    Transcript (${transcriptCount})
                 </button>
                 <button class="tab-btn ${this.activeTab === 'context' ? 'active' : ''}" @click=${() => { this.activeTab = 'context'; }}>
                     Context

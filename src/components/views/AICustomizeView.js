@@ -40,6 +40,7 @@ export class AICustomizeView extends LitElement {
         onProfileChange: { type: Function },
         _context: { state: true },
         _jobDescription: { state: true },
+        _avoidWords: { state: true },
     };
 
     constructor() {
@@ -48,6 +49,7 @@ export class AICustomizeView extends LitElement {
         this.onProfileChange = () => {};
         this._context = '';
         this._jobDescription = '';
+        this._avoidWords = '';
         this._loadFromStorage();
     }
 
@@ -56,10 +58,16 @@ export class AICustomizeView extends LitElement {
             const prefs = await metaMaxPro.storage.getPreferences();
             this._context = prefs.customPrompt || '';
             this._jobDescription = prefs.jobDescription || '';
+            this._avoidWords = prefs.avoidWords || '';
             this.requestUpdate();
         } catch (error) {
             console.error('Error loading AI customize storage:', error);
         }
+    }
+
+    async _saveAvoidWords(val) {
+        this._avoidWords = val;
+        await metaMaxPro.storage.updatePreference('avoidWords', val);
     }
 
     _handleProfileChange(e) {
@@ -132,6 +140,16 @@ export class AICustomizeView extends LitElement {
                                     @input=${e => this._saveJobDescription(e.target.value)}
                                 ></textarea>
                                 <div class="form-help">Answers will be tailored to highlight what this specific role values.</div>
+                            </div>
+                            <div class="form-group vertical">
+                                <label class="form-label">Words / phrases to avoid</label>
+                                <textarea
+                                    class="control"
+                                    placeholder="Comma-separated words or phrases you'd never say, e.g. leverage, robust, spearheaded, at the end of the day..."
+                                    .value=${this._avoidWords}
+                                    @input=${e => this._saveAvoidWords(e.target.value)}
+                                ></textarea>
+                                <div class="form-help">The assistant will never use these — makes answers sound like you.</div>
                             </div>
                         </div>
                     </section>

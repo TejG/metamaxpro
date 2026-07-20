@@ -154,9 +154,11 @@ function arrayBufferToBase64(buffer) {
 function buildContext(prefs) {
     const resume = (prefs.customPrompt || '').trim();
     const jd = (prefs.jobDescription || '').trim();
+    const avoid = (prefs.avoidWords || '').trim();
     const parts = [];
     if (resume) parts.push(`RESUME / BACKGROUND:\n${resume}`);
     if (jd) parts.push(`TARGET JOB DESCRIPTION:\n${jd}`);
+    if (avoid) parts.push(`WORDS/PHRASES TO AVOID (never use these — they don't sound like me):\n${avoid}`);
     return parts.join('\n\n');
 }
 
@@ -276,7 +278,8 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 audio: false, // Don't use browser audio on macOS
             });
 
-            console.log('macOS screen capture started - audio handled by SystemAudioDump');            if (audioMode === 'mic_only' || audioMode === 'both') {
+            console.log('macOS screen capture started - audio handled by SystemAudioDump');
+            if (audioMode === 'mic_only' || audioMode === 'both') {
                 let micStream = null;
                 try {
                     micStream = await navigator.mediaDevices.getUserMedia({
@@ -401,11 +404,13 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
-        console.log('MediaStream obtained:', {
-            hasVideo: mediaStream.getVideoTracks().length > 0,
-            hasAudio: mediaStream.getAudioTracks().length > 0,
-            videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
-        });
+        if (mediaStream) {
+            console.log('MediaStream obtained:', {
+                hasVideo: mediaStream.getVideoTracks().length > 0,
+                hasAudio: mediaStream.getAudioTracks().length > 0,
+                videoTrack: mediaStream.getVideoTracks()[0]?.getSettings(),
+            });
+        }
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
@@ -600,23 +605,49 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     );
 }
 
-const MANUAL_SCREENSHOT_PROMPT = `Please analyze the attached screenshot(s) and provide a concise, helpful answer.
-If the screenshot clearly contains a coding exercise, follow these steps:
-First, carefully read ALL screenshots to understand the full problem, constraints, examples, and edge cases.
-Then identify the programming language (check for language selector, code template, or context clues in the screenshots).
-Provide your response in this format:
-**Language:** [detected language]
-**Approach:**
-- [brief bullet points explaining your strategy as me, max 5]
-**Solution:**
+const MANUAL_SCREENSHOT_PROMPT = `You are prepping ME to answer this live during a technical interview. Analyze the attached screenshot(s).
+
+First, read ALL screenshots carefully to understand the full problem, constraints, examples, and edge cases. Identify the programming language from any language selector, code template, or context clues.
+
+If the screenshot is a coding problem, respond in EXACTLY this format and NOTHING else:
+
+Type this:
 \`\`\`[language]
-[complete, working, copy-paste ready code that handles all edge cases]
+[complete, clean, idiomatic, copy-paste ready solution that passes all examples and handles edge cases]
 \`\`\`
-No partial solutions. The code must pass all the examples shown.
-**Explanation:**
-- [Explain the code as an expert with detailed comments and insights]
-**Time Complexity:**
-- [Analyze the time complexity of the solution, considering different scenarios and inputs]
+
+CRITICAL — the code must match the on-screen template so it runs on the judge as-is:
+- Output ONLY the exact class/function the problem asks you to complete (e.g. \`class Solution:\` with the required method, or the standalone function shown). Match the given signature and type hints EXACTLY as shown on screen.
+- Do NOT redefine helper types the platform already provides (e.g. \`ListNode\`, \`TreeNode\`, \`Node\`, \`GraphNode\`, \`Optional\`). Redefining \`ListNode\` makes the judge fail with "cannot be serialized" / "not a valid ListNode". Use them as if already defined.
+- Do NOT add \`import\` statements for things the platform already provides (\`Optional\`, \`List\`, \`ListNode\`, etc.). Only import something if the template clearly requires it and it isn't already available.
+- Do NOT include a \`main\`, driver, test harness, example usage, or comments like "Definition for singly-linked list".
+- Write COMPACT code — no blank line between consecutive statements; a single blank line only between methods/functions if needed.
+
+What to say out loud:
+- \`[short first-person sentence naming the key insight]\`
+- \`[short first-person sentence on the approach / how I traverse the data]\`
+- \`[short first-person sentence on the important detail or trick]\`
+
+Complexity:
+- \`Time: O(...)\`
+- \`Space: O(...)\`
+
+Good edge cases to mention:
+- \`[edge case]\`
+- \`[edge case]\`
+- \`[edge case]\`
+
+Hard rules:
+- Wrap EVERY spoken line and EVERY complexity/edge-case line in backticks.
+- Spoken lines must be short, natural, first-person — what a confident candidate actually says, not an essay.
+- Do NOT use "Approach:", "Explanation:", "Language:" headers or any long prose. Do NOT restate the problem.
+- The code must be correct and runnable.
+
+If the screenshot is NOT a coding problem (e.g. a slide, a conceptual or behavioral question, a system-design diagram, a document, a chart, a form), IGNORE the coding format above. Instead answer AS ME — the candidate — in first person, out loud, the way I would actually respond in this live conversation:
+- Ground the answer in my resume/background and the target role from the context provided, and stay consistent with everything already said in this session.
+- Be specific and realistic — name real things, take a concrete point of view. Sound like a prepared, confident human, never like an AI.
+- Keep it tight and speakable (a few sentences or short bullets). No preamble like "Sure" or "As an AI", no restating the question.
+- If the screen shows a question directed at me, answer it directly first, then add one or two supporting details.
 `;
 
 // Shared helper: initialise video+canvas and return a base64 JPEG frame
@@ -644,7 +675,10 @@ async function _captureFrameAsBase64(quality = 'medium') {
         return null;
     }
 
-    const MAX_WIDTH = 1280;
+    // Keep enough resolution that dense code/text in a long question stays
+    // legible to the model. Solve accuracy on multi-screen questions is far
+    // more sensitive to legibility than to payload size.
+    const MAX_WIDTH = 1600;
     const srcW = hiddenVideo.videoWidth;
     const srcH = hiddenVideo.videoHeight;
     const destW = srcW > MAX_WIDTH ? MAX_WIDTH : srcW;
@@ -653,7 +687,7 @@ async function _captureFrameAsBase64(quality = 'medium') {
     offscreenCanvas.height = destH;
     offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
 
-    const qualityValue = quality === 'high' ? 0.85 : quality === 'low' ? 0.4 : 0.6;
+    const qualityValue = quality === 'high' ? 0.9 : quality === 'low' ? 0.5 : 0.75;
 
     return new Promise(resolve => {
         offscreenCanvas.toBlob(blob => {
@@ -864,16 +898,47 @@ ipcRenderer.on('clear-sensitive-data', async () => {
     await storage.clearAll();
 });
 
+// Reach the live <assistant-view> element (rendered in the app root's shadow
+// DOM) so shortcut-driven actions update its UI state (badge / analyzing).
+function _getAssistantView() {
+    const root = metaMaxProApp && metaMaxProApp.shadowRoot;
+    return root ? root.querySelector('assistant-view') : null;
+}
+
 // Handle shortcuts based on current view
 function handleShortcut(shortcutKey) {
     const currentView = metaMaxPro.getCurrentView();
 
     if (shortcutKey === 'ctrl+enter' || shortcutKey === 'cmd+enter') {
+        // "Answer now"
         if (currentView === 'main') {
             metaMaxPro.element().handleStart();
         } else {
-            captureManualScreenshot();
+            // Delegate to the component so it solves the buffered screens if
+            // any were added (else the current frame) and manages its own
+            // analyzing state. Fall back to the raw function if unavailable.
+            const av = _getAssistantView();
+            if (av) {
+                av.handleScreenAnswer();
+            } else {
+                analyzeWithCapturedScreenshots();
+            }
         }
+        return;
+    }
+
+    if (shortcutKey === 'add-screen') {
+        // Add the current screen to the buffer (only meaningful once a session
+        // is running and we're on the assistant view).
+        if (currentView !== 'main') {
+            const av = _getAssistantView();
+            if (av) {
+                av.handleCaptureScreenshot();
+            } else {
+                captureScreenshotToBuffer();
+            }
+        }
+        return;
     }
 }
 

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        #stage { position: relative; width: 100%; height: 100%; }
+
+        /* Mascot sits at the bottom-left of the window */
+        #mascot {
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 84px;
+            height: 104px;
+            object-fit: contain;
+            cursor: grab;
+            -webkit-user-drag: none;
+            filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
+            transition: transform 0.12s ease;
+        }
+        #mascot:hover { transform: scale(1.05) translateY(-2px); }
+        #mascot:active { cursor: grabbing; }
+
+        /* Clippy-style speech bubble above the mascot */
+        #bubble {
+            position: absolute;
+            left: 10px;
+            top: 6px;
+            max-width: 190px;
+            background: #ffffff;
+            color: #1a1a1a;
+            font-size: 12px;
+            line-height: 1.35;
+            padding: 8px 11px;
+            border-radius: 12px;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+            opacity: 0;
+            transform: translateY(6px) scale(0.96);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+        #bubble.show {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        /* little tail pointing down toward the mascot */
+        #bubble::after {
+            content: "";
+            position: absolute;
+            left: 22px;
+            bottom: -6px;
+            width: 12px;
+            height: 12px;
+            background: #ffffff;
+            transform: rotate(45deg);
+            box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.12);
+        }
+    </style>
+</head>
+<body>
+    <div id="stage">
+        <div id="bubble"></div>
+        <img id="mascot" src="./assets/mascot/max.svg" alt="mascot" title="Drag to move · click to restore" />
+    </div>
+    <script>
+        const { ipcRenderer } = require('electron');
+        const img = document.getElementById('mascot');
+        const bubble = document.getElementById('bubble');
+
+        // ── Drag + click-to-restore ──
+        let dragging = false, moved = 0, lastX = 0, lastY = 0;
+        img.addEventListener('mousedown', (e) => {
+            dragging = true; moved = 0; lastX = e.screenX; lastY = e.screenY;
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            const dx = e.screenX - lastX, dy = e.screenY - lastY;
+            lastX = e.screenX; lastY = e.screenY;
+            moved += Math.abs(dx) + Math.abs(dy);
+            ipcRenderer.send('mascot-drag', { dx, dy });
+        });
+        window.addEventListener('mouseup', () => {
+            if (!dragging) return;
+            dragging = false;
+            if (moved < 5) ipcRenderer.invoke('restore-from-mascot');
+        });
+
+        // ── Random Clippy-style chatter ──
+        const PHRASES = [
+            'Need a helping hand?',
+            "I'm here whenever you need me",
+            'zzz…',
+            'Psst — click me to come back',
+            'Ready when you are',
+            'Standing by 👀',
+            'Got a tricky question? Bring me back',
+            'Just a click away',
+            'Taking a little nap 💤',
+        ];
+        let hideTimer = null;
+        function showBubble() {
+            const text = PHRASES[Math.floor(Math.random() * PHRASES.length)];
+            bubble.textContent = text;
+            bubble.classList.add('show');
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => bubble.classList.remove('show'), 3800);
+            scheduleNext();
+        }
+        function scheduleNext() {
+            // Show only occasionally — the app stays minimized all day, so a
+            // long, slightly-random gap keeps the mascot from being noisy.
+            const delay = 240000 + Math.floor(Math.random() * 300000); // 4–9 min
+            setTimeout(showBubble, delay);
+        }
+        // First hello a little while after minimizing, then rarely.
+        setTimeout(showBubble, 25000);
+    </script>
+</body>
+</html>

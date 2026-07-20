@@ -367,28 +367,26 @@ function incrementCharUsage(provider, model, charCount) {
 function getAvailableModel() {
     const todayLimits = getTodayLimits();
 
-    // RPD limits: flash = 20, flash-lite = 20
-    // After both exhausted, fall back to flash (for paid API users)
-    // Prefer the new gemma fallback first if available in limits
-    // Updated defaults: some environments don't have 'gemma-3-27b-it' available
-    // Prefer stable Gemini models that are commonly available in the API.
+    // RPD limits: flash = 20, flash-lite = 20.
+    // Use current, vision-capable Gemini models. `gemini-2.5-flash` is fast and
+    // handles image input well; fall back to the lighter model once the daily
+    // flash quota is spent. (The old 'gemini-1.5' id is not a valid model name
+    // and also never incremented these counters, so the gate never advanced.)
     if (todayLimits.flash.count < 20) {
-        return 'gemini-1.5';
+        return 'gemini-2.5-flash';
     } else if (todayLimits.flashLite.count < 20) {
         return 'gemini-2.5-flash-lite';
     }
 
-    // As a final fallback, try a broadly supported Gemini model name.
-    return 'gemini-1.5';
+    // Final fallback once both daily quotas are spent.
+    return 'gemini-2.5-flash-lite';
 }
 
 function getModelForToday() {
     const todayEntry = getTodayLimits();
     const groq = todayEntry.groq;
 
-    if (groq['qwen3-32b'].chars < groq['qwen3-32b'].limit) {
-        return 'qwen/qwen3-32b';
-    }
+    // Note: qwen/qwen3-32b was decommissioned by Groq (returns 404); no longer used.
     if (groq['gpt-oss-120b'].chars < groq['gpt-oss-120b'].limit) {
         return 'openai/gpt-oss-120b';
     }

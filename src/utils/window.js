@@ -147,8 +147,7 @@ function getDefaultKeybinds() {
         toggleVisibility: `${primary}+\\`,
         toggleClickThrough: `${primary}+M`,
         nextStep: `${primary}+Enter`,
-        capture: `${primary}+Shift+C`,
-        solve: `${primary}+Shift+S`,
+        addScreen: `${primary}+Shift+Enter`,
         previousResponse: `${primary}+[`,
         nextResponse: `${primary}+]`,
         scrollUp: `${primary}+Shift+Up`,
@@ -240,7 +239,9 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         }
     }
 
-    // Register next step shortcut (either starts session or takes screenshot based on view)
+    // Register next step shortcut. In the main view it starts the session;
+    // in the assistant view it means "answer now" — analyse the buffered
+    // screens if any were added, otherwise grab and analyse the current frame.
     if (keybinds.nextStep) {
         try {
             globalShortcut.register(keybinds.nextStep, async () => {
@@ -261,6 +262,27 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
             console.log(`Registered nextStep: ${keybinds.nextStep}`);
         } catch (error) {
             console.error(`Failed to register nextStep (${keybinds.nextStep}):`, error);
+        }
+    }
+
+    // Register add-screen shortcut — adds the current screen to the capture
+    // buffer without analysing yet, so a long/multi-screen question can be
+    // stitched together (scroll → add → scroll → add → nextStep to answer).
+    if (keybinds.addScreen) {
+        try {
+            globalShortcut.register(keybinds.addScreen, () => {
+                console.log('Add-screen shortcut triggered');
+                try {
+                    mainWindow.webContents.executeJavaScript(`
+                        metaMaxPro.handleShortcut('add-screen');
+                    `);
+                } catch (error) {
+                    console.error('Error handling add-screen shortcut:', error);
+                }
+            });
+            console.log(`Registered addScreen: ${keybinds.addScreen}`);
+        } catch (error) {
+            console.error(`Failed to register addScreen (${keybinds.addScreen}):`, error);
         }
     }
 
@@ -397,6 +419,75 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     ipcMain.on('teleprompter-update', (event, text) => {
         if (teleprompterWindow && !teleprompterWindow.isDestroyed()) {
             teleprompterWindow.webContents.send('teleprompter-update', text);
+        }
+    });
+
+    // ── Minimize-to-mascot ──────────────────────────────────────
+    // Instead of sitting in the taskbar, "minimize" hides the main window and
+    // shows a small always-on-top mascot the user can drag and click to restore.
+    let mascotWindow = null;
+
+    function showMascot() {
+        if (mascotWindow && !mascotWindow.isDestroyed()) {
+            mascotWindow.showInactive();
+            return;
+        }
+        // Extra width/height leaves room for the speech bubble above the mascot.
+        const winW = 220;
+        const winH = 170;
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { height: shgt } = primaryDisplay.workAreaSize;
+
+        mascotWindow = new BrowserWindow({
+            width: winW,
+            height: winH,
+            x: 24,                    // bottom-left corner
+            y: shgt - winH - 24,
+            frame: false,
+            transparent: true,
+            alwaysOnTop: true,
+            resizable: false,
+            hasShadow: false,
+            skipTaskbar: true,
+            webPreferences: {
+                nodeIntegration: true,
+                contextIsolation: false,
+            },
+        });
+        mascotWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        mascotWindow.loadFile(path.join(__dirname, '../mascot.html'));
+        mascotWindow.on('closed', () => { mascotWindow = null; });
+    }
+
+    function hideMascot() {
+        if (mascotWindow && !mascotWindow.isDestroyed()) {
+            mascotWindow.close();
+        }
+        mascotWindow = null;
+    }
+
+    ipcMain.handle('minimize-to-mascot', () => {
+        if (!mainWindow.isDestroyed()) {
+            mainWindow.hide(); // hidden entirely — never in the taskbar
+        }
+        showMascot();
+        return { success: true };
+    });
+
+    ipcMain.handle('restore-from-mascot', () => {
+        hideMascot();
+        if (!mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+        return { success: true };
+    });
+
+    // Move the mascot window as the user drags it (relative deltas from renderer)
+    ipcMain.on('mascot-drag', (event, delta) => {
+        if (mascotWindow && !mascotWindow.isDestroyed() && delta) {
+            const [x, y] = mascotWindow.getPosition();
+            mascotWindow.setPosition(Math.round(x + (delta.dx || 0)), Math.round(y + (delta.dy || 0)));
         }
     });
 

@@ -7,6 +7,7 @@ import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AICustomizeView } from '../views/AICustomizeView.js';
 import { FeedbackView } from '../views/FeedbackView.js';
+import { ApiKeysView } from '../views/ApiKeysView.js';
 
 export class MetaMaxProApp extends LitElement {
     static styles = css`
@@ -303,11 +304,49 @@ export class MetaMaxProApp extends LitElement {
             color: var(--text-primary);
         }
 
+        /* Window-control buttons in the live bar (minimize / close) */
+        .win-btn {
+            -webkit-app-region: no-drag;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            width: 26px;
+            height: 22px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background var(--transition), color var(--transition);
+        }
+        .win-btn:hover {
+            background: var(--bg-hover, rgba(128,128,128,0.18));
+            color: var(--text-primary);
+        }
+        .win-btn.close:hover {
+            background: #e5484d;
+            color: #ffffff;
+        }
+        .win-btn.font-btn {
+            width: auto;
+            padding: 0 7px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: var(--font);
+        }
+
         /* Content inner */
         .content-inner {
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
+        }
+
+        /* Non-live views (Settings) sit below the fixed 38px drag bar so its
+           draggable region never overlaps or swallows clicks on the content. */
+        .content-inner:not(.live) {
+            padding-top: 38px;
+            box-sizing: border-box;
         }
 
         /* Simple page header with back button for non-main views */
@@ -411,10 +450,57 @@ export class MetaMaxProApp extends LitElement {
 
         .bottom-nav .nav-item svg { width: 18px; height: 18px; }
 
+        /* ── Settings shell: top tab bar + scrollable body ── */
+        .settings-shell {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0;
+        }
+        .settings-tabbar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 8px var(--space-md, 16px);
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-app);
+            overflow-x: auto;
+            flex-shrink: 0;
+        }
+        .settings-tab {
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-size: var(--font-size-sm, 13px);
+            font-family: var(--font);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background var(--transition), color var(--transition);
+        }
+        .settings-tab:hover { color: var(--text-primary); background: var(--bg-hover, rgba(128,128,128,0.12)); }
+        .settings-tab.active {
+            color: var(--btn-primary-text, var(--bg-app));
+            background: var(--accent);
+        }
+        .settings-tab.home {
+            color: var(--text-secondary);
+            margin-right: 4px;
+        }
+        .settings-tab.home:hover { color: var(--text-primary); }
+        .settings-tabbar .spacer { flex: 1; }
+        .settings-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+        }
+
     `;
 
     static properties = {
         currentView: { type: String },
+        settingsTab: { type: String },
         statusText: { type: String },
         startTime: { type: Number },
         isRecording: { type: Boolean },
@@ -438,6 +524,8 @@ export class MetaMaxProApp extends LitElement {
     constructor() {
         super();
         this.currentView = 'main';
+        this.settingsTab = 'preferences';
+        this._fontSize = 16;
         this.statusText = '';
         this.startTime = null;
         this.isRecording = false;
@@ -480,15 +568,29 @@ export class MetaMaxProApp extends LitElement {
                 metaMaxPro.storage.getPreferences()
             ]);
 
-            this.currentView = config.onboarded ? 'main' : 'onboarding';
+            // Home is the chat surface; onboarding still gates first run.
+            this.currentView = config.onboarded ? 'assistant' : 'onboarding';
             this.selectedProfile = prefs.selectedProfile || 'interview';
             this.selectedLanguage = prefs.selectedLanguage || 'en-US';
             this.selectedScreenshotInterval = prefs.selectedScreenshotInterval || '5';
             this.selectedImageQuality = prefs.selectedImageQuality || 'medium';
             this.layoutMode = config.layout || 'normal';
 
+            // Apply the saved response font size on startup (this was missing —
+            // the setting only took effect after moving the slider).
+            const fs = parseInt(prefs.fontSize, 10);
+            this._fontSize = Number.isFinite(fs) ? fs : 16;
+            document.documentElement.style.setProperty('--response-font-size', `${this._fontSize}px`);
+
             this._storageLoaded = true;
             this.requestUpdate();
+
+            // Auto-start the session so the chat is immediately usable. If no
+            // provider is configured, handleStart bails and the chat shows a
+            // "configure in Settings" banner (sessionActive stays false).
+            if (config.onboarded && !this.sessionActive) {
+                this.handleStart();
+            }
         } catch (error) {
             console.error('Error loading from storage:', error);
             this._storageLoaded = true;
@@ -501,6 +603,7 @@ export class MetaMaxProApp extends LitElement {
 
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
+            ipcRenderer.on('new-question', (_, question) => this.addQuestion(question));
             ipcRenderer.on('new-response', (_, response) => this.addNewResponse(response));
             ipcRenderer.on('update-response', (_, response) => this.updateCurrentResponse(response));
             ipcRenderer.on('update-status', (_, status) => this.setStatus(status));
@@ -560,34 +663,31 @@ export class MetaMaxProApp extends LitElement {
         }
     }
 
+    // Transcribed audio / typed question → a left-aligned chat bubble.
+    // The answer generators emit new-question first, then the "..." placeholder,
+    // so a simple append keeps the transcript in question → answer order.
+    addQuestion(text) {
+        if (!text || !String(text).trim()) return;
+        this.responses = [...this.responses, { role: 'question', text: String(text).trim() }];
+        this.currentResponseIndex = this.responses.length - 1;
+        this.requestUpdate();
+    }
+
     addNewResponse(response) {
         // Annotate response for color-coded corrections when applicable
         const annotated = this._annotateResponse(response);
-        try {
-            console.log('[IPC DEBUG] addNewResponse called. preview:', typeof response === 'string' ? (response.length > 120 ? response.substring(0,120) + '…' : response) : response);
-            console.log('[IPC DEBUG] responses length before add:', this.responses.length, 'currentResponseIndex:', this.currentResponseIndex);
-        } catch (e) {
-            // ignore logging failures
-        }
-        const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
-        this.responses = [...this.responses, annotated];
-        if (wasOnLatest || this.currentResponseIndex === -1) {
-            this.currentResponseIndex = this.responses.length - 1;
-        }
+        this.responses = [...this.responses, { role: 'answer', text: annotated }];
+        this.currentResponseIndex = this.responses.length - 1;
         this._awaitingNewResponse = false;
         this.requestUpdate();
     }
 
     updateCurrentResponse(response) {
         const annotated = this._annotateResponse(response);
-        try {
-            console.log('[IPC DEBUG] updateCurrentResponse called. preview:', typeof response === 'string' ? (response.length > 120 ? response.substring(0,120) + '…' : response) : response);
-            console.log('[IPC DEBUG] currentResponseIndex before update:', this.currentResponseIndex, 'responses length:', this.responses.length);
-        } catch (e) {
-            // ignore logging failures
-        }
-        if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), annotated];
+        const last = this.responses[this.responses.length - 1];
+        // Only replace the last entry if it's an answer; never overwrite a question.
+        if (last && last.role === 'answer') {
+            this.responses = [...this.responses.slice(0, -1), { role: 'answer', text: annotated }];
         } else {
             this.addNewResponse(response);
             return;
@@ -650,7 +750,7 @@ export class MetaMaxProApp extends LitElement {
             }
             this.sessionActive = false;
             this._stopTimer();
-            this.currentView = 'main';
+            this.currentView = 'assistant';
         } else {
             if (window.require) {
                 const { ipcRenderer } = window.require('electron');
@@ -662,8 +762,27 @@ export class MetaMaxProApp extends LitElement {
     async _handleMinimize() {
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
-            await ipcRenderer.invoke('window-minimize');
+            // Hide the main window (off taskbar) and show the floating mascot.
+            await ipcRenderer.invoke('minimize-to-mascot');
         }
+    }
+
+    async _handleQuit() {
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('quit-application');
+        }
+    }
+
+    // Adjust the chat response font size from the header (+/-), persist it, and
+    // apply it live via the shared --response-font-size CSS variable.
+    async _changeFontSize(delta) {
+        const current = Number.isFinite(this._fontSize) ? this._fontSize : 16;
+        const next = Math.min(32, Math.max(11, current + delta));
+        this._fontSize = next;
+        document.documentElement.style.setProperty('--response-font-size', `${next}px`);
+        this.requestUpdate();
+        try { await metaMaxPro.storage.updatePreference('fontSize', next); } catch (_) {}
     }
 
     async handleHideToggle() {
@@ -676,9 +795,6 @@ export class MetaMaxProApp extends LitElement {
     // ── Session start ──
 
     async handleStart() {
-        const prefs = await metaMaxPro.storage.getPreferences();
-        const providerMode = prefs.providerMode || 'cloud';
-
         const startSession = () => {
             metaMaxPro.startCapture(this.selectedScreenshotInterval, this.selectedImageQuality);
             this.responses = [];
@@ -689,63 +805,24 @@ export class MetaMaxProApp extends LitElement {
             this._startTimer();
         };
 
-        // Try Anthropic first when running in 'auto' or 'cloud' preference and a key exists
+        // Single unified mode: the user's own keys. Gemini powers live
+        // transcription; Groq/Anthropic (from the keys) generate answers and
+        // solve screenshots. Requires a Gemini key; otherwise the chat shows
+        // the "Session not started · Settings" banner.
         try {
-            if (providerMode === 'auto' || providerMode === 'cloud') {
-                const anthropicKey = await metaMaxPro.storage.getAnthropicApiKey().catch(() => '');
-                if (anthropicKey && anthropicKey.trim() !== '') {
-                    const ok = await metaMaxPro.initializeAnthropic(this.selectedProfile);
-                    if (ok) { startSession(); return; }
-                }
+            const apiKey = await metaMaxPro.storage.getApiKey().catch(() => '');
+            if (!apiKey || apiKey.trim() === '') {
+                this.sessionActive = false;
+                this.requestUpdate();
+                return;
             }
-
-            // Provider-specific flows
-            if (providerMode === 'cloud') {
-                const creds = await metaMaxPro.storage.getCredentials();
-                if (!creds.cloudToken || creds.cloudToken.trim() === '') {
-                    const mainView = this.shadowRoot.querySelector('main-view');
-                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-                    return;
-                }
-
-                const success = await metaMaxPro.initializeCloud(this.selectedProfile);
-                if (!success) {
-                    const mainView = this.shadowRoot.querySelector('main-view');
-                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-                    return;
-                }
-            } else if (providerMode === 'local') {
-                const success = await metaMaxPro.initializeLocal(this.selectedProfile);
-                if (!success) {
-                    const mainView = this.shadowRoot.querySelector('main-view');
-                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-                    return;
-                }
-            } else if (providerMode === 'anthropic') {
-                const success = await metaMaxPro.initializeAnthropic(this.selectedProfile);
-                if (!success) {
-                    const mainView = this.shadowRoot.querySelector('main-view');
-                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-                    return;
-                }
-            } else {
-                const apiKey = await metaMaxPro.storage.getApiKey();
-                if (!apiKey || apiKey === '') {
-                    const mainView = this.shadowRoot.querySelector('main-view');
-                    if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-                    return;
-                }
-
-                await metaMaxPro.initializeGemini(this.selectedProfile, this.selectedLanguage);
-            }
-
-            // If we reach here initialization succeeded for non-Anthropic path
+            await metaMaxPro.storage.updatePreference('providerMode', 'byok');
+            await metaMaxPro.initializeGemini(this.selectedProfile, this.selectedLanguage);
             startSession();
         } catch (err) {
             console.error('Error during handleStart:', err);
-            const mainView = this.shadowRoot.querySelector('main-view');
-            if (mainView && mainView.triggerApiKeyError) mainView.triggerApiKeyError();
-            return;
+            this.sessionActive = false;
+            this.requestUpdate();
         }
     }
 
@@ -820,7 +897,8 @@ export class MetaMaxProApp extends LitElement {
     }
 
     handleOnboardingComplete() {
-        this.currentView = 'main';
+        this.currentView = 'assistant';
+        this.handleStart();
     }
 
     updated(changedProperties) {
@@ -862,74 +940,8 @@ export class MetaMaxProApp extends LitElement {
                     ></main-view>
                 `;
 
-            case 'ai-customize':
-                return html`
-                    <div>
-                        <div class="page-back-header">
-                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
-                            <div class="page-title">AI Customization</div>
-                        </div>
-                        <ai-customize-view
-                            .selectedProfile=${this.selectedProfile}
-                            .onProfileChange=${p => this.handleProfileChange(p)}
-                        ></ai-customize-view>
-                    </div>
-                `;
-
-            case 'customize':
-                return html`
-                    <div>
-                        <div class="page-back-header">
-                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
-                            <div class="page-title">Settings</div>
-                        </div>
-                        <customize-view
-                            .selectedProfile=${this.selectedProfile}
-                            .selectedLanguage=${this.selectedLanguage}
-                            .selectedScreenshotInterval=${this.selectedScreenshotInterval}
-                            .selectedImageQuality=${this.selectedImageQuality}
-                            .layoutMode=${this.layoutMode}
-                            .onProfileChange=${p => this.handleProfileChange(p)}
-                            .onLanguageChange=${l => this.handleLanguageChange(l)}
-                            .onScreenshotIntervalChange=${i => this.handleScreenshotIntervalChange(i)}
-                            .onImageQualityChange=${q => this.handleImageQualityChange(q)}
-                            .onLayoutModeChange=${lm => this.handleLayoutModeChange(lm)}
-                        ></customize-view>
-                    </div>
-                `;
-
-            case 'feedback':
-                return html`
-                    <div>
-                        <div class="page-back-header">
-                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
-                            <div class="page-title">Feedback</div>
-                        </div>
-                        <feedback-view></feedback-view>
-                    </div>
-                `;
-
-            case 'help':
-                return html`
-                    <div>
-                        <div class="page-back-header">
-                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
-                            <div class="page-title">Help</div>
-                        </div>
-                        <help-view .onExternalLinkClick=${url => this.handleExternalLinkClick(url)}></help-view>
-                    </div>
-                `;
-
-            case 'history':
-                return html`
-                    <div>
-                        <div class="page-back-header">
-                            <button class="back-to-main" @click=${() => this.navigate('main')}>⟵ Home</button>
-                            <div class="page-title">History</div>
-                        </div>
-                        <history-view></history-view>
-                    </div>
-                `;
+            case 'settings':
+                return this.renderSettings();
 
             case 'assistant':
                 return html`
@@ -939,6 +951,9 @@ export class MetaMaxProApp extends LitElement {
                         .selectedProfile=${this.selectedProfile}
                         .sessionActive=${this.sessionActive}
                         .onSendText=${msg => this.handleSendText(msg)}
+                        .onProfileChange=${p => this.handleProfileChange(p)}
+                        .onStart=${() => this.handleStart()}
+                        .onOpenSettings=${() => this.openSettings()}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
                         @response-index-changed=${this.handleResponseIndexChanged}
                         @response-animation-complete=${() => {
@@ -952,6 +967,71 @@ export class MetaMaxProApp extends LitElement {
             default:
                 return html`<div>Unknown view: ${this.currentView}</div>`;
         }
+    }
+
+    openSettings(tab = 'preferences') {
+        this.settingsTab = tab;
+        this.currentView = 'settings';
+        this.requestUpdate();
+    }
+
+    renderSettingsSection() {
+        switch (this.settingsTab) {
+            case 'profile':
+                return html`<ai-customize-view
+                    .selectedProfile=${this.selectedProfile}
+                    .onProfileChange=${p => this.handleProfileChange(p)}
+                ></ai-customize-view>`;
+            case 'api-keys':
+                return html`<api-keys-view></api-keys-view>`;
+            case 'history':
+                return html`<history-view></history-view>`;
+            case 'help':
+                return html`
+                    <help-view .onExternalLinkClick=${url => this.handleExternalLinkClick(url)}></help-view>
+                    <feedback-view></feedback-view>
+                `;
+            case 'preferences':
+            default:
+                return html`<customize-view
+                    .selectedProfile=${this.selectedProfile}
+                    .selectedLanguage=${this.selectedLanguage}
+                    .selectedScreenshotInterval=${this.selectedScreenshotInterval}
+                    .selectedImageQuality=${this.selectedImageQuality}
+                    .layoutMode=${this.layoutMode}
+                    .onProfileChange=${p => this.handleProfileChange(p)}
+                    .onLanguageChange=${l => this.handleLanguageChange(l)}
+                    .onScreenshotIntervalChange=${i => this.handleScreenshotIntervalChange(i)}
+                    .onImageQualityChange=${q => this.handleImageQualityChange(q)}
+                    .onLayoutModeChange=${lm => this.handleLayoutModeChange(lm)}
+                ></customize-view>`;
+        }
+    }
+
+    renderSettings() {
+        const tabs = [
+            { id: 'preferences', label: 'Settings' },
+            { id: 'profile', label: 'Profile' },
+            { id: 'api-keys', label: 'API Keys' },
+            { id: 'history', label: 'History' },
+            { id: 'help', label: 'Help' },
+        ];
+        return html`
+            <div class="settings-shell">
+                <div class="settings-tabbar">
+                    <button class="settings-tab home" @click=${() => this.navigate('assistant')} title="Back to chat">‹ Chat</button>
+                    ${tabs.map(t => html`
+                        <button
+                            class="settings-tab ${this.settingsTab === t.id ? 'active' : ''}"
+                            @click=${() => { this.settingsTab = t.id; }}
+                        >${t.label}</button>
+                    `)}
+                </div>
+                <div class="settings-body">
+                    ${this.renderSettingsSection()}
+                </div>
+            </div>
+        `;
     }
 
     renderSidebar() {
@@ -1006,20 +1086,21 @@ export class MetaMaxProApp extends LitElement {
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
-                    <button class="live-bar-back" @click=${() => this.handleClose()} title="End session">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 0 1-.02 1.06L8.832 10l3.938 3.71a.75.75 0 1 1-1.04 1.08l-4.5-4.25a.75.75 0 0 1 0-1.08l4.5-4.25a.75.75 0 0 1 1.06.02Z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
+                    <span class="live-bar-text">${profileLabels[this.selectedProfile] || 'Session'}</span>
                 </div>
-                <div class="live-bar-center">
-                    ${profileLabels[this.selectedProfile] || 'Session'}
-                </div>
+                <div class="live-bar-center"></div>
                 <div class="live-bar-right">
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>
                     ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
-                    <span class="live-bar-text clickable" @click=${() => this.handleHideToggle()}>[hide]</span>
+                    <button class="win-btn font-btn" @click=${() => this._changeFontSize(-1)} title="Smaller text">A−</button>
+                    <button class="win-btn font-btn" @click=${() => this._changeFontSize(1)} title="Larger text">A+</button>
+                    <button class="win-btn" @click=${() => this._handleMinimize()} title="Minimize to mascot">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                    <button class="win-btn close" @click=${() => this._handleQuit()} title="Close">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+                    </button>
                 </div>
             </div>
         `;

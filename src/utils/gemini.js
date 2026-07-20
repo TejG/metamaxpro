@@ -49,7 +49,10 @@ let systemAudioProc = null;
 // Silence detection: wait for a 1.2s pause after speech before triggering the LLM.
 // Resets on every new transcription chunk.
 let transcriptionSilenceTimer = null;
-const SILENCE_THRESHOLD_MS = 1200;
+// How long to wait after the last speech chunk before answering. Lower = faster
+// perceived response; too low triggers on natural mid-sentence pauses. 700ms is
+// the sweet spot (ADR-003).
+const SILENCE_THRESHOLD_MS = 700;
 let sessionReadyAt = 0;
 const SESSION_WARMUP_MS = 2000;
 
@@ -149,11 +152,7 @@ function scheduleGroqTrigger() {
     transcriptionSilenceTimer = setTimeout(() => {
         transcriptionSilenceTimer = null;
         if (currentTranscription.trim() !== '') {
-            if (hasGroqKey()) {
-                sendToGroq(currentTranscription);
-            } else {
-                sendToGemma(currentTranscription);
-            }
+            routeAnswer(currentTranscription);
             currentTranscription = '';
         }
     }, SILENCE_THRESHOLD_MS);
@@ -183,9 +182,31 @@ function sendToRenderer(channel, data) {
 }
 
 // Environment override for Gemini/fallback models
-// Default to a broadly available Gemini model name; allow env var to override.
-const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-1.5';
+// Default to a current, vision-capable Gemini model name; allow env var to override.
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-2.5-flash-lite';
 const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-09-2025';
+
+// Currently-valid Groq chat models, tried in order when the rotation's pick
+// has been decommissioned (Groq 404s on retired model IDs). Keep this list to
+// models Groq still serves; update if one starts 404ing.
+const GROQ_FALLBACK_MODELS = [
+    'openai/gpt-oss-120b',
+    'llama-3.3-70b-versatile',
+    'openai/gpt-oss-20b',
+    'moonshotai/kimi-k2-instruct',
+    'llama-3.1-8b-instant',
+];
+
+// Current, valid, vision-capable Gemini models used for screenshot solving,
+// in order of preference. Kept in one place so the single- and multi-image
+// paths stay in sync. (Previous list had invalid ids like 'gemini-1.5' /
+// 'gemini-2.1' that only burned 404 retries before landing on a working model.)
+const GEMINI_IMAGE_FALLBACKS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-pro'];
+
+// Build a deduped fallback list starting from the preferred model.
+function buildImageModelFallbacks(preferred) {
+    return [preferred, ...GEMINI_IMAGE_FALLBACKS].filter((m, i, arr) => m && arr.indexOf(m) === i);
+}
 
 function isModelNotFoundError(err) {
     if (!err) return false;
@@ -360,6 +381,248 @@ async function getStoredSetting(key, defaultValue) {
 function hasGroqKey() {
     const key = getGroqApiKey();
     return key && key.trim() != ''
+}
+
+function hasAnthropicKey() {
+    const key = getAnthropicApiKey();
+    return key && key.trim() !== '';
+}
+
+// Answer a question with a cross-provider cascade: try the fastest available
+// provider, and if it fails for ANY reason (dead model, 400/413, network, no
+// key) fall through to the next one, so a single provider outage never leaves
+// the user without an answer. Groq (~1s) → Claude (~1-2s) → Gemini (fallback).
+// This owns the shared concerns (dedup, question/placeholder bubbles, history,
+// save); the _stream* helpers only stream tokens and return the text or null.
+async function routeAnswer(transcription) {
+    const intent = (transcription || '').trim();
+    if (!intent) return;
+
+    // Deduplicate: don't re-answer the same question (silence + turnComplete both fire).
+    if (intent === lastProcessedIntent) {
+        console.log('[routeAnswer] Duplicate intent, skipping');
+        return;
+    }
+    lastProcessedIntent = intent;
+
+    // Question bubble (left) + answer placeholder (right).
+    sendToRenderer('new-question', intent);
+    sendToRenderer('new-response', '...');
+    sendToRenderer('update-status', 'Thinking...');
+
+    // Push the user turn once into shared history (with language lock).
+    const lock = buildLanguageLockInstruction(intent, groqConversationHistory);
+    groqConversationHistory.push({ role: 'user', content: lock ? `${intent}\n\n${lock}` : intent });
+    if (groqConversationHistory.length > 20) groqConversationHistory = groqConversationHistory.slice(-20);
+
+    // Cascade: first provider that returns text wins.
+    let answer = null;
+    if (hasGroqKey())                        answer = await _streamGroq();
+    if ((answer == null) && hasAnthropicKey()) answer = await _streamAnthropic();
+    if ((answer == null) && getApiKey())       answer = await _streamGemma();
+
+    if (answer == null || !answer.trim()) {
+        sendToRenderer('update-response', '⚠️ Could not get an answer from any configured provider. Check your API keys in Settings.');
+        sendToRenderer('update-status', 'Listening...');
+        return;
+    }
+
+    groqConversationHistory.push({ role: 'assistant', content: answer.trim() });
+    if (groqConversationHistory.length > 20) groqConversationHistory = groqConversationHistory.slice(-20);
+    saveConversationTurn(intent, answer.trim());
+    sendToRenderer('update-status', 'Listening...');
+}
+
+// ── Provider streamers ──────────────────────────────────────────────
+// Each reads the shared groqConversationHistory (the user turn is already
+// appended by routeAnswer), streams tokens via 'update-response', and returns
+// the full answer text on success or null on any failure (so the cascade
+// continues). They do NOT push history, save, dedup, or emit bubbles.
+
+async function _streamGroq() {
+    const groqApiKey = getGroqApiKey();
+    if (!groqApiKey) return null;
+    if (currentGroqAbortController) { currentGroqAbortController.abort(); currentGroqAbortController = null; }
+
+    // Prefer a fast, non-reasoning model first (lowest time-to-first-token), then
+    // the rotation pick, then the rest. Reasoning models (gpt-oss) are slower.
+    const preferred = getModelForToday();
+    const candidates = ['llama-3.3-70b-versatile', preferred, ...GROQ_FALLBACK_MODELS]
+        .filter((m, i, a) => m && a.indexOf(m) === i);
+    // Trim history to keep the request well under Groq's request-size cap (avoids 413).
+    const trimmed = trimConversationHistoryForGemma(groqConversationHistory, 12000);
+
+    try {
+        let response = null;
+        let modelToUse = candidates[0];
+        for (const candidate of candidates) {
+            const body = {
+                model: candidate,
+                messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...trimmed],
+                stream: true,
+                temperature: 0.7,
+                max_tokens: 1024,
+            };
+            if (/gpt-oss/i.test(candidate)) body.reasoning_effort = 'low';
+            else if (/qwen/i.test(candidate)) body.reasoning_effort = 'none';
+
+            currentGroqAbortController = new AbortController();
+            const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify(body),
+            });
+            if (r.ok) { response = r; modelToUse = candidate; break; }
+            const errText = await r.text();
+            console.error(`[Groq] ${candidate} → ${r.status}:`, errText.slice(0, 200));
+            // Per-model failures (retired / bad param / too large for this model) → next model.
+            if (r.status === 404 || r.status === 400 || r.status === 413
+                || /decommission|not found|reasoning_effort|too large|context|invalid model/i.test(errText)) continue;
+            // Auth / rate limit / server error → give up on Groq (cascade to next provider).
+            return null;
+        }
+        if (!response) return null;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '', inThinkBlock = false, streamBuffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith('data: ')) continue;
+                const data = t.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                    const json = JSON.parse(data);
+                    const token = json.choices?.[0]?.delta?.content || '';
+                    if (token) {
+                        fullText += token;
+                        if (fullText.includes('<think>')) inThinkBlock = true;
+                        if (inThinkBlock && fullText.includes('</think>')) inThinkBlock = false;
+                        if (!inThinkBlock) {
+                            const disp = stripThinkingTags(fullText);
+                            if (disp) sendToRenderer('update-response', disp);
+                        }
+                    }
+                } catch (_) { /* skip bad chunk */ }
+            }
+        }
+        const cleaned = stripThinkingTags(fullText);
+        if (cleaned) incrementCharUsage('groq', modelToUse.split('/').pop(), cleaned.length);
+        console.log(`[Groq] answer completed (${modelToUse})`);
+        return cleaned || null;
+    } catch (error) {
+        if (error.name === 'AbortError') return null;
+        console.error('[Groq] stream error:', error.message);
+        return null;
+    } finally {
+        currentGroqAbortController = null;
+    }
+}
+
+async function _streamAnthropic() {
+    const key = getAnthropicApiKey();
+    if (!key) return null;
+    if (currentGroqAbortController) { currentGroqAbortController.abort(); currentGroqAbortController = null; }
+    const messages = recentHistoryAsAnthropicMessages(12);
+    if (!messages.length) return null;
+    try {
+        currentGroqAbortController = new AbortController();
+        const response = await fetchWithAnthropicRetry(
+            'https://api.anthropic.com/v1/messages',
+            {
+                method: 'POST',
+                headers: {
+                    'x-api-key': key,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
+                    'content-type': 'application/json',
+                },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-6',
+                    max_tokens: 1024,
+                    system: currentSystemPrompt ? [{ type: 'text', text: currentSystemPrompt, cache_control: { type: 'ephemeral' } }] : undefined,
+                    messages,
+                    stream: true,
+                }),
+            },
+            'Sonnet'
+        );
+        if (!response) return null;
+        if (!response.ok) {
+            const t = await response.text();
+            console.error('[Anthropic] answer error:', response.status, t.slice(0, 200));
+            return null;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '', streamBuffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith('data: ')) continue;
+                const data = t.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                    const json = JSON.parse(data);
+                    if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
+                        fullText += json.delta.text;
+                        sendToRenderer('update-response', fullText);
+                    }
+                } catch (_) { /* skip */ }
+            }
+        }
+        console.log('[Anthropic] answer completed');
+        return fullText.trim() || null;
+    } catch (error) {
+        if (error.name === 'AbortError') return null;
+        console.error('[Anthropic] stream error:', error.message);
+        return null;
+    } finally {
+        currentGroqAbortController = null;
+    }
+}
+
+async function _streamGemma() {
+    const apiKey = getApiKey();
+    if (!apiKey) return null;
+    const trimmed = trimConversationHistoryForGemma(groqConversationHistory, 42000);
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const messages = trimmed.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+        const sys = currentSystemPrompt || 'You are a helpful assistant.';
+        const contents = [
+            { role: 'user', parts: [{ text: sys }] },
+            { role: 'model', parts: [{ text: 'Understood. I will follow these instructions.' }] },
+            ...messages,
+        ];
+        const chosenModel = getAvailableModel() || GEMINI_FALLBACK_MODEL;
+        console.log('[Gemini] answer using model:', chosenModel);
+        const response = await ai.models.generateContentStream({ model: chosenModel, contents });
+        let fullText = '';
+        for await (const chunk of response) {
+            const ct = chunk.text;
+            if (ct) { fullText += ct; sendToRenderer('update-response', fullText); }
+        }
+        if (fullText) incrementCharUsage('gemini', chosenModel, fullText.length);
+        console.log('[Gemini] answer completed');
+        return fullText.trim() || null;
+    } catch (error) {
+        console.error('[Gemini] stream error:', error.message);
+        return null;
+    }
 }
 
 const CLEAN_TRANSCRIPTION_SYSTEM_PROMPT = `You are an input preprocessing layer for a live interview AI assistant.
@@ -567,6 +830,10 @@ async function sendToGroq(transcription) {
     }
     lastProcessedIntent = intent;
 
+    // Show the transcribed question (left), then an answer placeholder (right).
+    sendToRenderer('new-question', intent);
+    sendToRenderer('new-response', '...');
+
     const questionToAnswer = intent;
     const assumptionPrefix = '';
     const languageLockInstruction = buildLanguageLockInstruction(questionToAnswer, groqConversationHistory);
@@ -574,14 +841,13 @@ async function sendToGroq(transcription) {
         ? `${questionToAnswer}\n\n${languageLockInstruction}`
         : questionToAnswer;
 
-    const modelToUse = getModelForToday();
-    if (!modelToUse) {
-        console.log('All Groq daily limits exhausted');
-        sendToRenderer('update-status', 'Groq limits reached for today');
-        return;
-    }
+    // Preferred model from the daily rotation, then a list of currently-valid
+    // Groq models to fall back to if one has been decommissioned (Groq returns
+    // 404 for retired model IDs — this makes the answer path self-heal).
+    const preferred = getModelForToday();
+    const candidates = [preferred, ...GROQ_FALLBACK_MODELS].filter((m, i, a) => m && a.indexOf(m) === i);
 
-    console.log(`Sending to Groq (${modelToUse}):`, questionToAnswer.substring(0, 100) + '...');
+    console.log(`Sending to Groq (candidates: ${candidates.join(', ')}):`, questionToAnswer.substring(0, 100) + '...');
 
     groqConversationHistory.push({
         role: 'user',
@@ -593,16 +859,11 @@ async function sendToGroq(transcription) {
     }
 
     try {
-        currentGroqAbortController = new AbortController();
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${groqApiKey}`,
-                'Content-Type': 'application/json'
-            },
-            signal: currentGroqAbortController.signal,
-            body: JSON.stringify({
-                model: modelToUse,
+        let response = null;
+        let modelToUse = candidates[0];
+        for (const candidate of candidates) {
+            const body = {
+                model: candidate,
                 messages: [
                     { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
                     ...groqConversationHistory
@@ -610,14 +871,43 @@ async function sendToGroq(transcription) {
                 stream: true,
                 temperature: 0.7,
                 max_tokens: 1024,
-                reasoning_effort: 'none'
-            })
-        });
+            };
+            // reasoning_effort is model-specific: gpt-oss requires low|medium|high
+            // (rejects "none"); qwen accepts "none"; other models reject it entirely.
+            if (/gpt-oss/i.test(candidate)) {
+                body.reasoning_effort = 'low'; // minimal reasoning → keep it fast
+            } else if (/qwen/i.test(candidate)) {
+                body.reasoning_effort = 'none';
+            }
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Groq API error:', response.status, errorText);
-            sendToRenderer('update-status', `Groq error: ${response.status}`);
+            currentGroqAbortController = new AbortController();
+            const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify(body),
+            });
+
+            if (r.ok) { response = r; modelToUse = candidate; break; }
+
+            const errorText = await r.text();
+            console.error(`Groq API error for ${candidate}:`, r.status, errorText.slice(0, 300));
+            // 404 = retired model; 400 = param the model rejects (differs per model).
+            // Both are per-model, so try the next candidate. Auth/rate/5xx are fatal.
+            const perModel = r.status === 404 || r.status === 400
+                || /decommission|not found|does not exist|no longer|invalid model|model_not_found|reasoning_effort/i.test(errorText);
+            if (perModel) {
+                console.log(`[Groq] ${candidate} rejected (${r.status}) — trying next model`);
+                continue; // try the next candidate
+            }
+            // Auth (401/403), rate limit (429), or server error — stop and report.
+            sendToRenderer('update-status', `Groq error: ${r.status}`);
+            return;
+        }
+
+        if (!response) {
+            console.error('[Groq] All candidate models failed');
+            sendToRenderer('update-status', 'Groq: no available model — check Settings');
             return;
         }
 
@@ -710,6 +1000,10 @@ async function sendToGemma(transcription) {
     }
 
     console.log('Sending to Gemma:', transcription.substring(0, 100) + '...');
+
+    // Show the transcribed question (left), then an answer placeholder (right).
+    sendToRenderer('new-question', transcription.trim());
+    sendToRenderer('new-response', '...');
 
     const languageLockInstruction = buildLanguageLockInstruction(transcription.trim(), groqConversationHistory);
     const questionForModel = languageLockInstruction
@@ -827,8 +1121,6 @@ async function sendToAnthropic(transcription) {
         return;
     }
 
-    // Signal to the UI immediately — card appears while middleware runs
-    sendToRenderer('new-response', '...');
     sendToRenderer('update-status', 'Processing...');
 
     // Middleware skipped to achieve < 2s real-time performance.
@@ -849,6 +1141,10 @@ async function sendToAnthropic(transcription) {
         return;
     }
     lastProcessedIntent = intent;
+
+    // Show the transcribed question (left), then an answer placeholder (right).
+    sendToRenderer('new-question', intent);
+    sendToRenderer('new-response', '...');
 
     const questionToAnswer = intent;
     const languageLockInstruction = buildLanguageLockInstruction(questionToAnswer, groqConversationHistory);
@@ -963,6 +1259,196 @@ async function sendToAnthropic(transcription) {
     }
 }
 
+// Map recent conversation into Anthropic messages (role user/assistant),
+// dropping leading assistant turns so the array starts with a user turn.
+function recentHistoryAsAnthropicMessages(maxTurns = 8) {
+    if (!Array.isArray(groqConversationHistory) || groqConversationHistory.length === 0) return [];
+    const msgs = groqConversationHistory
+        .slice(-maxTurns)
+        .map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: typeof m.content === 'string' ? m.content : String(m.content || ''),
+        }))
+        .filter(m => m.content.trim());
+    while (msgs.length && msgs[0].role === 'assistant') msgs.shift();
+    return msgs;
+}
+
+// Solve screenshots with Claude vision (Anthropic provider mode). Context-aware:
+// persona (resume + JD + human-tone rules) as system, prior conversation as
+// history, then the image(s) + task prompt as the final user turn.
+async function sendImagesToAnthropic(images, prompt) {
+    const anthropicApiKey = getAnthropicApiKey();
+    if (!anthropicApiKey) return { success: false, error: 'No Anthropic API key configured' };
+    if (!images || images.length === 0) return { success: false, error: 'No images provided' };
+
+    const imageBlocks = images.map(data => ({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/jpeg', data },
+    }));
+    const messages = [
+        ...recentHistoryAsAnthropicMessages(),
+        { role: 'user', content: [...imageBlocks, { type: 'text', text: prompt }] },
+    ];
+
+    try {
+        currentGroqAbortController = new AbortController();
+        const response = await fetchWithAnthropicRetry(
+            'https://api.anthropic.com/v1/messages',
+            {
+                method: 'POST',
+                headers: {
+                    'x-api-key': anthropicApiKey,
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31',
+                    'content-type': 'application/json',
+                },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-6',
+                    max_tokens: 4096,
+                    system: currentSystemPrompt
+                        ? [{ type: 'text', text: currentSystemPrompt, cache_control: { type: 'ephemeral' } }]
+                        : undefined,
+                    messages,
+                    stream: true,
+                }),
+            },
+            'Sonnet-Vision'
+        );
+
+        if (!response) return { success: false, error: 'Request aborted' };
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error('[Anthropic] Vision API error:', response.status, errText);
+            return { success: false, error: `Claude error ${response.status}` };
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let streamBuffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith('data: ')) continue;
+                const data = t.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                    const json = JSON.parse(data);
+                    if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
+                        fullText += json.delta.text;
+                        sendToRenderer('update-response', fullText);
+                    }
+                } catch (_) { /* skip malformed SSE lines */ }
+            }
+        }
+
+        saveScreenAnalysis(prompt, fullText, 'claude-sonnet-4-6');
+        recordScreenTurnInHistory(fullText);
+        return { success: true, text: fullText, model: 'claude-sonnet-4-6' };
+    } catch (error) {
+        if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
+        console.error('[Anthropic] Vision error:', error);
+        return { success: false, error: error.message };
+    } finally {
+        currentGroqAbortController = null;
+    }
+}
+
+// Solve screenshots with a Groq vision model (best-effort fallback for whisper
+// mode when no Gemini/Anthropic key is available). OpenAI-compatible format.
+async function sendImagesToGroqVision(images, prompt) {
+    const groqApiKey = getGroqApiKey();
+    if (!groqApiKey) return { success: false, error: 'No Groq API key configured' };
+    if (!images || images.length === 0) return { success: false, error: 'No images provided' };
+
+    const userContent = [
+        { type: 'text', text: prompt },
+        ...images.map(data => ({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${data}` } })),
+    ];
+    const messages = [
+        { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+        ...groqConversationHistory
+            .slice(-8)
+            .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: typeof m.content === 'string' ? m.content : String(m.content || '') }))
+            .filter(m => m.content.trim()),
+        { role: 'user', content: userContent },
+    ];
+
+    try {
+        currentGroqAbortController = new AbortController();
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+            signal: currentGroqAbortController.signal,
+            body: JSON.stringify({
+                model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+                messages,
+                stream: true,
+            }),
+        });
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error('[Groq] Vision API error:', response.status, errText);
+            return { success: false, error: `Groq vision error ${response.status}` };
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let streamBuffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop();
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith('data: ')) continue;
+                const data = t.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                    const json = JSON.parse(data);
+                    const delta = json.choices?.[0]?.delta?.content;
+                    if (delta) { fullText += delta; sendToRenderer('update-response', fullText); }
+                } catch (_) { /* skip malformed SSE lines */ }
+            }
+        }
+        saveScreenAnalysis(prompt, fullText, 'groq-vision');
+        recordScreenTurnInHistory(fullText);
+        return { success: true, text: fullText, model: 'groq-vision' };
+    } catch (error) {
+        if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
+        console.error('[Groq] Vision error:', error);
+        return { success: false, error: error.message };
+    } finally {
+        currentGroqAbortController = null;
+    }
+}
+
+// Route screenshot solving to a vision-capable provider based on the active
+// mode, with fallbacks so a solve works whenever ANY vision key is configured.
+// (cloud/local are handled by the IPC callers before this is reached.)
+async function routeImagesToProvider(images, prompt) {
+    if (currentProviderMode === 'anthropic' && getAnthropicApiKey()) {
+        return sendImagesToAnthropic(images, prompt);
+    }
+    if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
+        if (getApiKey()) return sendMultipleImagesToGeminiHttp(images, prompt);
+        if (getAnthropicApiKey()) return sendImagesToAnthropic(images, prompt);
+        if (getGroqApiKey()) return sendImagesToGroqVision(images, prompt);
+        return { success: false, error: 'No vision-capable API key configured — add a Gemini, Anthropic, or Groq key to analyze screenshots' };
+    }
+    // Default (byok) — Gemini HTTP
+    return sendMultipleImagesToGeminiHttp(images, prompt);
+}
+
 async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US', isReconnect = false) {
     if (isInitializingSession) {
         console.log('Session initialization already in progress');
@@ -1037,12 +1523,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         }
                         // Fallback: if silence timer didn't already fire (e.g. no transcription events came through)
                         if (currentTranscription.trim() !== '') {
-                            sendToRenderer('new-response', '...');
-                            if (hasGroqKey()) {
-                                sendToGroq(currentTranscription);
-                            } else {
-                                sendToGemma(currentTranscription);
-                            }
+                            routeAnswer(currentTranscription);
                             currentTranscription = '';
                         }
                     }
@@ -1125,12 +1606,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                                     transcriptionSilenceTimer = null;
                                 }
                                 if (currentTranscription.trim() !== '') {
-                                    sendToRenderer('new-response', '...');
-                                    if (hasGroqKey()) {
-                                        sendToGroq(currentTranscription);
-                                    } else {
-                                        sendToGemma(currentTranscription);
-                                    }
+                                    routeAnswer(currentTranscription);
                                     currentTranscription = '';
                                 }
                             }
@@ -1439,19 +1915,52 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
     }
 }
 
+// Map the recent Groq/audio conversation into Gemini `contents` turns so a
+// screenshot answer is coherent with what has already been said in the session.
+// Gemini uses the role name 'model' (not 'assistant').
+function recentHistoryAsGeminiContents(maxTurns = 8) {
+    if (!Array.isArray(groqConversationHistory) || groqConversationHistory.length === 0) return [];
+    return groqConversationHistory
+        .slice(-maxTurns)
+        .map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: typeof m.content === 'string' ? m.content : String(m.content || '') }],
+        }))
+        .filter(t => t.parts[0].text.trim());
+}
+
+// Build a context-aware image request: the session persona (resume + JD +
+// human-tone rules) as systemInstruction, prior conversation as history, then
+// the image(s) + task prompt as the final user turn.
+function buildImageRequest(imageParts, taskPrompt) {
+    const contents = [
+        ...recentHistoryAsGeminiContents(),
+        { role: 'user', parts: [...imageParts, { text: taskPrompt }] },
+    ];
+    const config = {};
+    if (currentSystemPrompt && currentSystemPrompt.trim()) {
+        config.systemInstruction = currentSystemPrompt;
+    }
+    return { contents, config };
+}
+
+// Record a screenshot exchange in the shared conversation history so subsequent
+// audio answers stay aware of what was shown/answered on screen.
+function recordScreenTurnInHistory(answer) {
+    if (!answer || !answer.trim()) return;
+    groqConversationHistory.push({ role: 'user', content: '(I shared my screen and asked for help with what was shown.)' });
+    groqConversationHistory.push({ role: 'assistant', content: answer.trim() });
+    if (groqConversationHistory.length > 20) {
+        groqConversationHistory = groqConversationHistory.slice(-20);
+    }
+}
+
 async function sendImageToGeminiHttp(base64Data, prompt) {
     // Get available model based on rate limits
     let model = getAvailableModel();
 
-    // Candidate fallback list in order of preference. Keep names conservative to
-    // avoid using models that may not exist in some API tiers.
-    const MODEL_FALLBACKS = [
-        model,
-        'gemini-1.5',
-        'gemini-1.5-pro',
-        'gemini-2.1',
-        'gemini-2.5-flash-lite',
-    ];
+    // Candidate fallback list in order of preference (current, valid models).
+    const MODEL_FALLBACKS = buildImageModelFallbacks(model);
 
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -1460,17 +1969,10 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
     try {
         const ai = new GoogleGenAI({ apiKey: apiKey });
-        const contents = [
-            {
-                inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: base64Data,
-                },
-            },
-            { text: prompt },
-        ];
+        const imageParts = [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }];
+        const { contents, config } = buildImageRequest(imageParts, prompt);
 
-        console.log(`[Gemini] Sending single image to ${model} (streaming)...`);
+        console.log(`[Gemini] Sending single image to ${model} (streaming, context-aware=${!!config.systemInstruction})...`);
 
         // Attempt a few transient network/fetch retries and also try alternate
         // model names if the API returns a 404 model-not-found error. We iterate
@@ -1485,7 +1987,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             while (attempt < MAX_ATTEMPTS_PER_MODEL) {
                 try {
                     console.log(`[Gemini] trying model ${model} (attempt ${attempt + 1}/${MAX_ATTEMPTS_PER_MODEL})`);
-                    response = await ai.models.generateContentStream({ model: model, contents: contents });
+                    response = await ai.models.generateContentStream({ model: model, contents: contents, config });
                     lastErr = null;
                     break; // got a response for this model
                 } catch (err) {
@@ -1541,6 +2043,8 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
         // Save screen analysis to history
         saveScreenAnalysis(prompt, fullText, model);
+        // Keep the shared conversation aware of this screen exchange
+        recordScreenTurnInHistory(fullText);
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
@@ -1581,21 +2085,19 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
         });
         const ai = new GoogleGenAI({ apiKey: apiKey });
 
-        const contents = [
-            ...images.map(data => ({
-                inlineData: { mimeType: 'image/jpeg', data },
-            })),
-            { text: prompt },
-        ];
+        const imageParts = images.map(data => ({
+            inlineData: { mimeType: 'image/jpeg', data },
+        }));
+        const { contents, config } = buildImageRequest(imageParts, prompt);
 
-        // Try model fallbacks similar to single-image path
-        const MODEL_FALLBACKS = [model, 'gemini-1.5', 'gemini-1.5-pro', 'gemini-2.1', 'gemini-2.5-flash-lite'];
+        // Try model fallbacks similar to single-image path (current, valid models)
+        const MODEL_FALLBACKS = buildImageModelFallbacks(model);
         let response = null;
         let usedModel = model;
         for (const candidateModel of MODEL_FALLBACKS) {
             try {
-                console.log(`Sending ${images.length} images to ${candidateModel} (streaming)...`);
-                response = await ai.models.generateContentStream({ model: candidateModel, contents: contents });
+                console.log(`Sending ${images.length} images to ${candidateModel} (streaming, context-aware=${!!config.systemInstruction})...`);
+                response = await ai.models.generateContentStream({ model: candidateModel, contents: contents, config });
                 usedModel = candidateModel;
                 break;
             } catch (err) {
@@ -1629,6 +2131,7 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
 
         console.log(`Multi-image response completed from ${model}`);
         saveScreenAnalysis(prompt, fullText, model);
+        recordScreenTurnInHistory(fullText);
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
@@ -1734,12 +2237,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         // Callback fires when Whisper VAD detects end of speech and gets a transcript
         function onWhisperTranscription(transcript) {
             if (!transcript || transcript.trim() === '') return;
-            sendToRenderer('new-response', '...');
-            if (hasGroqKey()) {
-                sendToGroq(transcript);
-            } else {
-                sendToGemma(transcript);
-            }
+            routeAnswer(transcript);
         }
 
         startWhisperVAD(onWhisperTranscription);
@@ -1864,9 +2362,10 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return result;
             }
 
-            // Use HTTP API instead of realtime session
-            const result = await sendImageToGeminiHttp(data, prompt);
-            return result;
+            // Route to the active provider's vision path (Gemini / Anthropic /
+            // Groq), with fallbacks. Uses the multi-image path (it delegates a
+            // single image to the single-image path internally).
+            return await routeImagesToProvider([data], prompt);
         } catch (error) {
             console.error('Error sending image:', error);
             return { success: false, error: error.message };
@@ -1891,8 +2390,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return result;
             }
 
-            const result = await sendMultipleImagesToGeminiHttp(images, prompt);
-            return result;
+            // Route to the active provider's vision path (Gemini / Anthropic /
+            // Groq), with fallbacks.
+            return await routeImagesToProvider(images, prompt);
         } catch (error) {
             console.error('Error sending multiple images:', error);
             return { success: false, error: error.message };
@@ -1931,11 +2431,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
 
         if (currentProviderMode === 'whisper') {
-            if (hasGroqKey()) {
-                sendToGroq(text.trim());
-            } else {
-                sendToGemma(text.trim());
-            }
+            routeAnswer(text.trim());
             return { success: true };
         }
 
@@ -1944,11 +2440,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         try {
             console.log('Sending text message:', text);
 
-            if (hasGroqKey()) {
-                sendToGroq(text.trim());
-            } else {
-                sendToGemma(text.trim());
-            }
+            routeAnswer(text.trim());
 
             await geminiSessionRef.current.sendRealtimeInput({ text: text.trim() });
             return { success: true };
