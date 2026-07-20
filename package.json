@@ -1,7 +1,7 @@
 {
     "name": "meta-booster-pro",
     "productName": "Meta Booster Pro",
-    "version": "0.9.0",
+    "version": "0.10.0",
     "description": "Meta Booster Pro",
     "main": "src/index.js",
     "scripts": {
@@ -24,6 +24,7 @@
         "@huggingface/transformers": "^3.8.1",
         "electron-squirrel-startup": "^1.0.1",
         "ollama": "^0.6.3",
+        "update-electron-app": "^3.3.0",
         "ws": "^8.19.0"
     },
     "devDependencies": {
@@ -31,7 +32,8 @@
         "@electron-forge/maker-deb": "^7.8.1",
         "@electron-forge/maker-dmg": "^7.8.1",
         "@electron-forge/maker-rpm": "^7.8.1",
-    "@electron-forge/maker-squirrel": "^7.8.1",
+        "@electron-forge/maker-squirrel": "^7.8.1",
+        "@electron-forge/maker-zip": "^7.11.2",
         "@electron-forge/plugin-auto-unpack-natives": "^7.8.1",
         "@electron-forge/plugin-fuses": "^7.8.1",
         "@electron/fuses": "^1.8.0",

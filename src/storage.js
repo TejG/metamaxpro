@@ -39,6 +39,23 @@ const DEFAULT_LIMITS = {
     data: [] // Array of { date: 'YYYY-MM-DD', flash: { count }, flashLite: { count }, groq: { 'qwen3-32b': { chars, limit }, 'gpt-oss-120b': { chars, limit }, 'gpt-oss-20b': { chars, limit } }, gemini: { 'gemma-3-27b-it': { chars } } }
 };
 
+// ============ GEMINI MODEL SELECTION ============
+// Model IDs are env-overridable so upgrading to a newer generation (or pinning a
+// specific version for a paid key) never requires code changes. Defaults use
+// Google's `-latest` aliases, which always resolve to the CURRENT generally-
+// available Flash models — as of 2026 that's the Gemini 3.x Flash family, the
+// recommended free-tier default (~1,500 requests/day for Flash, ~1,000 for
+// Flash-Lite) and a big jump over the old fixed `gemini-2.5-flash` (250/day).
+// Using aliases means we ride future free-tier model bumps automatically.
+const GEMINI_PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GEMINI_LITE_MODEL = process.env.GEMINI_LITE_MODEL || 'gemini-flash-lite-latest';
+
+// Self-imposed daily rotation thresholds (kept safely under Google's free-tier
+// RPD caps). Once the primary model's daily count is spent we rotate to the
+// lighter model. Override via env if your key has different quotas.
+const GEMINI_PRIMARY_RPD = Number(process.env.GEMINI_PRIMARY_RPD) || 200;
+const GEMINI_LITE_RPD = Number(process.env.GEMINI_LITE_RPD) || 800;
+
 // Get the config directory path based on OS
 function getConfigDir() {
     const platform = os.platform();
@@ -336,13 +353,15 @@ function incrementLimitCount(model) {
         limits.data = limits.data.filter(entry => entry.date === today);
     }
 
-    // Increment the appropriate model count
-    if (model === 'gemini-2.5-flash' || model === 'gemma-3-27b-it') {
-        todayEntry.flash = todayEntry.flash || { count: 0 };
-        todayEntry.flash.count++;
-    } else if (model === 'gemini-2.5-flash-lite') {
+    // Increment the appropriate model count. The lite model rotates into the
+    // flashLite bucket; everything else (the primary Flash alias, gemma, and any
+    // concrete Flash fallback) counts toward the flash bucket.
+    if (model === GEMINI_LITE_MODEL || model === 'gemini-2.5-flash-lite') {
         todayEntry.flashLite = todayEntry.flashLite || { count: 0 };
         todayEntry.flashLite.count++;
+    } else {
+        todayEntry.flash = todayEntry.flash || { count: 0 };
+        todayEntry.flash.count++;
     }
 
     setLimits(limits);
@@ -367,19 +386,17 @@ function incrementCharUsage(provider, model, charCount) {
 function getAvailableModel() {
     const todayLimits = getTodayLimits();
 
-    // RPD limits: flash = 20, flash-lite = 20.
-    // Use current, vision-capable Gemini models. `gemini-2.5-flash` is fast and
-    // handles image input well; fall back to the lighter model once the daily
-    // flash quota is spent. (The old 'gemini-1.5' id is not a valid model name
-    // and also never incremented these counters, so the gate never advanced.)
-    if (todayLimits.flash.count < 20) {
-        return 'gemini-2.5-flash';
-    } else if (todayLimits.flashLite.count < 20) {
-        return 'gemini-2.5-flash-lite';
+    // Use the current, vision-capable Flash alias while its daily budget lasts,
+    // then rotate to the lighter/higher-RPD Flash-Lite alias. Model IDs and the
+    // rotation thresholds are configurable via env (see the constants above).
+    if (todayLimits.flash.count < GEMINI_PRIMARY_RPD) {
+        return GEMINI_PRIMARY_MODEL;
+    } else if (todayLimits.flashLite.count < GEMINI_LITE_RPD) {
+        return GEMINI_LITE_MODEL;
     }
 
-    // Final fallback once both daily quotas are spent.
-    return 'gemini-2.5-flash-lite';
+    // Final fallback once both daily budgets are spent.
+    return GEMINI_LITE_MODEL;
 }
 
 function getModelForToday() {

@@ -7,6 +7,29 @@ const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
 
+// In-app auto-update. Uses update.electronjs.org (a free, hosted Squirrel feed
+// backed by this repo's GitHub Releases) so users get new versions in place and
+// never have to re-download the installer. No-ops in dev (app.isPackaged is
+// false). NOTE: macOS auto-update requires the app to be CODE-SIGNED — Squirrel
+// on macOS silently refuses unsigned builds. Windows auto-updates unsigned.
+function setupAutoUpdates() {
+    if (!app.isPackaged) return; // dev run — nothing to update
+    try {
+        const { updateElectronApp, UpdateSourceType } = require('update-electron-app');
+        updateElectronApp({
+            updateSource: {
+                type: UpdateSourceType.ElectronPublicUpdateService,
+                repo: process.env.UPDATE_REPO || 'TejG/metamaxpro',
+            },
+            updateInterval: '1 hour',
+            notifyUser: true,
+            logger: { log: (...a) => console.log('[AutoUpdate]', ...a) },
+        });
+    } catch (err) {
+        console.error('[AutoUpdate] failed to initialize:', err && err.message ? err.message : err);
+    }
+}
+
 const geminiSessionRef = { current: null };
 let mainWindow = null;
 
@@ -29,6 +52,7 @@ app.whenReady().then(async () => {
     setupGeminiIpcHandlers(geminiSessionRef);
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
+    setupAutoUpdates();
 });
 
 app.on('window-all-closed', () => {

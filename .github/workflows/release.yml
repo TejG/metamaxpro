@@ -68,7 +68,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
-          files: out/make/**/*.dmg
+          # .dmg = manual first install; .zip = Squirrel.Mac auto-update feed
+          files: |
+            out/make/**/*.dmg
+            out/make/zip/**/*.zip
 
   build-mac-x64:
     runs-on: macos-13
@@ -92,7 +95,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
-          files: out/make/**/*.dmg
+          # .dmg = manual first install; .zip = Squirrel.Mac auto-update feed
+          files: |
+            out/make/**/*.dmg
+            out/make/zip/**/*.zip
 
   build-windows:
     runs-on: windows-latest
@@ -116,6 +122,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
+          # Squirrel.Windows auto-update needs the full feed, not just the .exe:
+          # RELEASES (the manifest) + the *-full.nupkg must be on the release too.
           files: |
             out/make/squirrel.windows/**/*.exe
+            out/make/squirrel.windows/**/*.nupkg
+            out/make/squirrel.windows/**/RELEASES
             out/make/**/*.msi

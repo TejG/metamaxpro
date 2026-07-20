@@ -46,6 +46,12 @@ module.exports = {
             platforms: ['darwin'],
         },
         {
+            // Required for macOS in-app auto-update: Squirrel.Mac downloads a
+            // .zip of the .app (the .dmg is only for first-time manual install).
+            name: '@electron-forge/maker-zip',
+            platforms: ['darwin'],
+        },
+        {
             name: '@reforged/maker-appimage',
             platforms: ['linux'],
             config: {

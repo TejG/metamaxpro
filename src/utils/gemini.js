@@ -183,7 +183,7 @@ function sendToRenderer(channel, data) {
 
 // Environment override for Gemini/fallback models
 // Default to a current, vision-capable Gemini model name; allow env var to override.
-const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-2.5-flash-lite';
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-flash-lite-latest';
 const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-09-2025';
 
 // Currently-valid Groq chat models, tried in order when the rotation's pick
@@ -201,7 +201,16 @@ const GROQ_FALLBACK_MODELS = [
 // in order of preference. Kept in one place so the single- and multi-image
 // paths stay in sync. (Previous list had invalid ids like 'gemini-1.5' /
 // 'gemini-2.1' that only burned 404 retries before landing on a working model.)
-const GEMINI_IMAGE_FALLBACKS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-pro'];
+// NOTE: gemini-2.5-pro is intentionally excluded — it is NOT available on the
+// Gemini free tier (the API returns 429 with `limit: 0`), so including it only
+// ever surfaced a misleading "quota exceeded for gemini-2.5-pro" error as the
+// last fallback. Override via GEMINI_IMAGE_FALLBACKS if you have a paid key.
+// Try the current GA Flash aliases first, then fall back to concrete, known-good
+// free-tier models as a safety net if an alias ever resolves to something the
+// key can't use. gemini-2.5-pro is intentionally absent (free-tier limit: 0).
+const GEMINI_IMAGE_FALLBACKS = (process.env.GEMINI_IMAGE_FALLBACKS
+    ? process.env.GEMINI_IMAGE_FALLBACKS.split(',').map(s => s.trim()).filter(Boolean)
+    : ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
 
 // Build a deduped fallback list starting from the preferred model.
 function buildImageModelFallbacks(preferred) {
@@ -221,6 +230,30 @@ function isModelNotFoundError(err) {
         // ignore
     }
     return false;
+}
+
+// True when the API rejected the request for quota / rate-limit reasons
+// (HTTP 429 / RESOURCE_EXHAUSTED). On the free tier this fires both for
+// per-minute rate limits (transient — worth trying another model) and for
+// models with no free-tier access at all, e.g. gemini-2.5-pro (limit: 0).
+function isRateLimitError(err) {
+    if (!err) return false;
+    const msg = (err.message || err.toString() || '').toLowerCase();
+    const status = err.status || err.code || err.response?.status;
+    if (status === 429) return true;
+    return msg.includes('429') || msg.includes('too many requests') ||
+        msg.includes('resource_exhausted') || msg.includes('quota');
+}
+
+// Extract the API-suggested retry delay (seconds) from a 429 body, if present.
+function getRetryDelaySeconds(err) {
+    try {
+        const s = err && (err.message || err.toString() || '');
+        const m = s.match(/retry(?:delay)?["\s:]*["']?(\d+(?:\.\d+)?)s/i) ||
+            s.match(/retry in (\d+(?:\.\d+)?)\s*s/i);
+        if (m) return Math.ceil(parseFloat(m[1]));
+    } catch (e) { /* ignore */ }
+    return null;
 }
 
 // Build context message for session restoration
@@ -2003,6 +2036,13 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
                         break; // try next candidateModel
                     }
 
+                    // Rate-limited (429): retrying the SAME model won't help within
+                    // the per-minute window, so skip straight to the next fallback.
+                    if (isRateLimitError(err)) {
+                        console.log(`[Gemini] model ${model} rate-limited (429), trying next fallback`);
+                        break; // try next candidateModel
+                    }
+
                     if (attempt < MAX_ATTEMPTS_PER_MODEL) {
                         const waitMs = 500 * attempt;
                         console.log(`[Gemini] retrying in ${waitMs}ms...`);
@@ -2049,6 +2089,11 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
         return { success: true, text: fullText, model: model };
     } catch (error) {
         console.error('[Gemini] Error sending image to Gemini HTTP:', error && error.stack ? error.stack : error);
+        if (isRateLimitError(error)) {
+            const secs = getRetryDelaySeconds(error);
+            const wait = secs ? ` Try again in about ${secs}s.` : '';
+            return { success: false, error: `Gemini rate limit reached on the free tier.${wait} If this keeps happening, add billing to your Google AI Studio key for higher limits.` };
+        }
         const message = (error && (error.message || error.toString())) || 'Unknown error';
         return { success: false, error: message };
     }
@@ -2094,6 +2139,7 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
         const MODEL_FALLBACKS = buildImageModelFallbacks(model);
         let response = null;
         let usedModel = model;
+        let lastErr = null;
         for (const candidateModel of MODEL_FALLBACKS) {
             try {
                 console.log(`Sending ${images.length} images to ${candidateModel} (streaming, context-aware=${!!config.systemInstruction})...`);
@@ -2101,6 +2147,7 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
                 usedModel = candidateModel;
                 break;
             } catch (err) {
+                lastErr = err;
                 const msg = err && (err.message || err.toString());
                 console.error(`[Gemini] generateContentStream failed for model ${candidateModel}:`, msg, err && err.stack ? err.stack : err);
                 const isNotFound = msg && msg.toLowerCase().includes('not found') && msg.toLowerCase().includes('model');
@@ -2108,13 +2155,15 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
                     console.log(`[Gemini] model ${candidateModel} not available, trying next fallback`);
                     continue;
                 }
-                // For transient errors, retry next candidate as well
+                // For transient / rate-limit errors, retry next candidate as well
                 continue;
             }
         }
 
         if (!response) {
-            throw new Error('No response from Gemini generateContentStream for any candidate models');
+            // Surface the underlying cause so the catch below can produce a
+            // friendly rate-limit message instead of a generic failure.
+            throw lastErr || new Error('No response from Gemini generateContentStream for any candidate models');
         }
 
         incrementLimitCount(usedModel);
@@ -2136,6 +2185,11 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
         return { success: true, text: fullText, model: model };
     } catch (error) {
         console.error('Error sending images to Gemini HTTP:', error && error.stack ? error.stack : error);
+        if (isRateLimitError(error)) {
+            const secs = getRetryDelaySeconds(error);
+            const wait = secs ? ` Try again in about ${secs}s.` : '';
+            return { success: false, error: `Gemini rate limit reached on the free tier.${wait} If this keeps happening, add billing to your Google AI Studio key for higher limits.` };
+        }
         // Some errors come with nested 'cause' or 'error' fields from the library
         const message = (error && (error.message || error.toString())) || 'Unknown error';
         return { success: false, error: message };
