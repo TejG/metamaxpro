@@ -423,11 +423,28 @@ export class OnboardingView extends LitElement {
         this.isWindows = (typeof process !== 'undefined') && process.platform === 'win32';
         this.permStatus = { platform: this.isMac ? 'darwin' : 'other', screen: 'unknown', microphone: 'unknown' };
         this._pollTimer = null;
+        // On macOS Sequoia (15+), a freshly-granted Screen Recording permission
+        // does NOT take effect for the already-running process — the app must
+        // be quit and reopened, or screenshare/system-audio capture silently
+        // fails despite the permission showing "granted". We track the status
+        // we started with so we can detect that transition and require a
+        // restart instead of silently unlocking.
+        this._screenStatusAtLaunch = null;
+        this._needsRestartForScreen = false;
     }
 
     firstUpdated() {
         this.currentSlide = this.gateMode ? 1 : (this.initialSlide || 0);
         this.refreshPermissions();
+        
+        // If starting on or advancing to the permissions slide, request screen
+        // recording permission immediately so the user sees the native prompt
+        // before we start polling. This ensures the prompt appears while the
+        // window is visible and the user understands why we need it.
+        if (this.currentSlide === 1) {
+            this.requestScreenPermissionIfNeeded();
+        }
+        
         // Keep permission status live so the gate opens right after the user
         // grants access in System Settings.
         this._pollTimer = setInterval(() => this.refreshPermissions(), 1500);
@@ -449,7 +466,7 @@ export class OnboardingView extends LitElement {
     // -only mode still works). They can enable it later in Settings.
     get requiredGranted() {
         if (!this.isMac) return true;
-        return this.permStatus.screen === 'granted';
+        return this.permStatus.screen === 'granted' && !this._needsRestartForScreen;
     }
 
     get micPending() {
@@ -461,9 +478,46 @@ export class OnboardingView extends LitElement {
         if (!ipc) return;
         try {
             const status = await ipc.invoke('permissions:get-status');
-            if (status) this.permStatus = status;
+            if (status) {
+                // Remember the status we first observed this launch so we can
+                // detect a not-granted → granted transition below.
+                if (this._screenStatusAtLaunch === null) {
+                    this._screenStatusAtLaunch = status.screen;
+                }
+                // If Screen Recording just became granted *during this run* (it
+                // wasn't granted when we started), macOS Sequoia+ requires a
+                // full app restart before capture actually works — flag it
+                // instead of letting the gate silently unlock.
+                if (this.isMac && this._screenStatusAtLaunch !== 'granted' && status.screen === 'granted') {
+                    this._needsRestartForScreen = true;
+                }
+                this.permStatus = status;
+            }
         } catch (e) {
             console.error('Failed to load permission status:', e);
+        }
+    }
+
+    async restartApp() {
+        const ipc = this._ipc;
+        if (!ipc) return;
+        try { await ipc.invoke('app:relaunch'); } catch (e) { console.error('Failed to relaunch app:', e); }
+    }
+
+    async requestScreenPermissionIfNeeded() {
+        // Only request on macOS and only if we haven't already granted it
+        if (!this.isMac || this.permStatus.screen === 'granted') return;
+        
+        const ipc = this._ipc;
+        if (!ipc) return;
+        
+        try {
+            console.log('[Onboarding] Requesting screen recording permission...');
+            await ipc.invoke('permissions:request-screen');
+            // Refresh status after requesting
+            setTimeout(() => this.refreshPermissions(), 500);
+        } catch (e) {
+            console.error('[Onboarding] Failed to request screen recording permission:', e);
         }
     }
 
@@ -508,7 +562,15 @@ export class OnboardingView extends LitElement {
     next() {
         if (this.gateMode) { this.completeOnboarding(); return; }
         if (this.currentSlide >= 3) { this.completeOnboarding(); return; }
-        this.currentSlide = this.currentSlide + 1;
+        
+        const nextSlide = this.currentSlide + 1;
+        this.currentSlide = nextSlide;
+        
+        // If advancing to the permissions slide, request screen recording
+        // permission so the user sees the native prompt immediately.
+        if (nextSlide === 1) {
+            this.requestScreenPermissionIfNeeded();
+        }
     }
 
     back() {
@@ -694,13 +756,23 @@ export class OnboardingView extends LitElement {
                         <h1 class="left-title">${copy.title}</h1>
                         <p class="left-sub">${copy.sub}</p>
 
-                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording is required. Enable it for MetaQuest in Settings, then return here — this unlocks automatically.</div>` : ''}
+                        ${gateBlocked ? html`
+                            <div class="gate-hint">
+                                ${this._needsRestartForScreen
+                                    ? '✅ Screen Recording granted — MetaQuest needs to restart for it to take effect (required on newer macOS versions).'
+                                    : '⚠ Screen Recording is required. Enable it for MetaQuest in Settings, then return here — this unlocks automatically.'}
+                            </div>
+                        ` : ''}
                         ${(this.currentSlide === 1 && !gateBlocked && this.micPending) ? html`<div class="gate-hint">Microphone isn't granted yet. It's recommended, but you can continue and add it later in Settings.</div>` : ''}
 
                         <div class="left-actions">
-                            <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
-                                ${this.currentSlide === 1 && this.micPending && !gateBlocked ? 'Skip for now' : this._primaryLabel()} ${gateBlocked ? '' : '→'}
-                            </button>
+                            ${this._needsRestartForScreen ? html`
+                                <button class="btn-primary" @click=${() => this.restartApp()}>Restart MetaQuest →</button>
+                            ` : html`
+                                <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
+                                    ${this.currentSlide === 1 && this.micPending && !gateBlocked ? 'Skip for now' : this._primaryLabel()} ${gateBlocked ? '' : '→'}
+                                </button>
+                            `}
                             ${showBack ? html`<button class="btn-back" @click=${() => this.back()}>Back</button>` : ''}
                         </div>
                     </div>

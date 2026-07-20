@@ -1772,7 +1772,6 @@ async function startMacOSAudioCapture(geminiSessionRef) {
             sendToRenderer('update-status', '⚠️ Grant Screen Recording permission (System Settings ▸ Privacy & Security), then restart to capture audio.');
         }
     } catch (_) { /* getMediaAccessStatus unsupported on this OS version — ignore */ }
-
     const spawnOptions = {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
@@ -1874,7 +1873,14 @@ async function startMacOSAudioCapture(geminiSessionRef) {
         // Died almost immediately (and not because the user stopped it) → the OS
         // blocked it. Tell the user the two things that actually fix it.
         if (!isUserClosing && Date.now() - systemAudioSpawnedAt < 1500) {
-            sendToRenderer('update-status', `⚠️ Audio helper stopped immediately (code ${code}). Grant Screen Recording permission, and if the app was downloaded, right-click it and choose Open once to allow it.`);
+            const screenStatusNow = (() => { try { return systemPreferences.getMediaAccessStatus('screen'); } catch (_) { return 'unknown'; } })();
+            const msg = screenStatusNow === 'granted'
+                // On macOS Sequoia+ a freshly granted Screen Recording permission
+                // doesn't take effect for an already-running process — this is
+                // the #1 cause of "granted but still no audio" on new machines.
+                ? '⚠️ Audio helper stopped immediately (code ' + code + '). Screen Recording shows as granted, but macOS requires MetaQuest to be fully quit and reopened before it takes effect — please restart the app.'
+                : `⚠️ Audio helper stopped immediately (code ${code}). Grant Screen Recording permission, and if the app was downloaded, right-click it and choose Open once to allow it.`;
+            sendToRenderer('update-status', msg);
         }
         systemAudioProc = null;
     });

@@ -42,18 +42,16 @@ app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
-    // Request the macOS permissions the app needs up front so audio capture
-    // works on first run instead of failing silently. Screenshots only need
-    // Screen Recording; audio additionally needs Microphone (for mic/both
-    // modes) — and macOS never shows the mic prompt unless we explicitly ask.
+    // DON'T request permissions at startup — it triggers prompts before the user
+    // sees the onboarding UI, which is confusing and can lead to permission issues.
+    // The onboarding flow handles permission requests properly by:
+    // 1. Showing the user WHY we need permissions first
+    // 2. Requesting them at the right time (when the window is visible)
+    // 3. Polling status so the gate opens immediately after granting
+    //
+    // We only log the current status for debugging purposes.
     if (process.platform === 'darwin') {
-        const { desktopCapturer, systemPreferences } = require('electron');
-        // Screen Recording — used for screenshots AND system-audio capture.
-        desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
-        // Microphone — DON'T request here. macOS only shows the native prompt
-        // once, and at startup the always-on-top overlay covers it. The
-        // onboarding "Allow" button requests it while the window is a normal,
-        // reachable window, so the prompt is actually visible.
+        const { systemPreferences } = require('electron');
         try {
             console.log('[Permissions] microphone status:', systemPreferences.getMediaAccessStatus('microphone'));
         } catch (e) {
@@ -358,6 +356,23 @@ function setupGeneralIpcHandlers() {
         return { platform: 'darwin', screen, microphone };
     });
 
+    // Trigger the screen recording permission request (macOS only).
+    // This is called from onboarding when the user sees the permissions step.
+    ipcMain.handle('permissions:request-screen', async () => {
+        if (process.platform !== 'darwin') return { requested: true };
+        try {
+            const { desktopCapturer } = require('electron');
+            // Calling getSources() triggers the macOS Screen Recording permission
+            // prompt if it hasn't been granted yet. We don't need the actual sources,
+            // just to trigger the prompt.
+            await desktopCapturer.getSources({ types: ['screen'] });
+            return { requested: true };
+        } catch (error) {
+            console.error('[Permissions] Failed to request screen recording:', error);
+            return { requested: false, error: error.message };
+        }
+    });
+
     // Trigger the native microphone prompt (macOS only; no-op elsewhere).
     ipcMain.handle('permissions:request-microphone', async () => {
         if (process.platform !== 'darwin') return { granted: true };
@@ -389,6 +404,21 @@ function setupGeneralIpcHandlers() {
             console.error('Error opening settings pane:', error);
             return { success: false, error: error.message };
         }
+    });
+
+    // Quit and relaunch the app. Needed because on macOS Sequoia (15+) newly
+    // granted Screen Recording / system-audio permissions do NOT take effect
+    // for an already-running process — the app must be fully restarted, or
+    // capture silently fails even though the permission shows as "granted".
+    ipcMain.handle('app:relaunch', async () => {
+        try {
+            app.relaunch();
+            app.exit(0);
+        } catch (error) {
+            console.error('Error relaunching app:', error);
+            return { success: false, error: error.message };
+        }
+        return { success: true };
     });
 
     ipcMain.on('update-keybinds', (event, newKeybinds) => {

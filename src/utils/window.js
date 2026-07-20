@@ -63,11 +63,26 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         callback(allowed.includes(permission));
     });
 
+    // Handle display media (screen capture) requests. This is called when the
+    // renderer uses navigator.mediaDevices.getDisplayMedia(). On macOS, this
+    // requires Screen Recording permission to be granted in System Settings.
+    // The first call to desktopCapturer.getSources() will trigger the macOS
+    // permission prompt if not already granted.
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
-            desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
-                callback({ video: sources[0], audio: 'loopback' });
-            });
+            desktopCapturer.getSources({ types: ['screen'] })
+                .then(sources => {
+                    if (sources && sources.length > 0) {
+                        callback({ video: sources[0], audio: 'loopback' });
+                    } else {
+                        console.error('[Screen Capture] No screen sources available');
+                        callback({});
+                    }
+                })
+                .catch(error => {
+                    console.error('[Screen Capture] Failed to get sources:', error);
+                    callback({});
+                });
         },
         // On Windows, useSystemPicker bypasses our loopback audio injection — disable it
         { useSystemPicker: process.platform !== 'win32' }
