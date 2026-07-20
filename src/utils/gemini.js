@@ -186,7 +186,18 @@ function sendToRenderer(channel, data) {
 // Environment override for Gemini/fallback models
 // Default to a current, vision-capable Gemini model name; allow env var to override.
 const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || process.env.GEMMA_FALLBACK_MODEL || 'gemini-flash-lite-latest';
-const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-09-2025';
+// Native-audio Live models used for real-time transcription, current first.
+// Dated preview IDs get RETIRED over time — the old pinned '...-09-2025' was,
+// which silently killed all audio (the Live session couldn't connect, so audio
+// was streamed to nothing). We now try a chain and fall through on failure.
+// Override the whole list via GEMINI_LIVE_MODEL (comma-separated).
+const GEMINI_LIVE_MODELS = (process.env.GEMINI_LIVE_MODEL
+    ? process.env.GEMINI_LIVE_MODEL.split(',').map(s => s.trim()).filter(Boolean)
+    : [
+        'gemini-2.5-flash-native-audio-preview-12-2025',
+        'gemini-2.5-flash-preview-native-audio-dialog',
+        'gemini-2.5-flash-native-audio-preview-09-2025',
+    ]);
 
 // Currently-valid Groq chat models, tried in order when the rotation's pick
 // has been decommissioned (Groq 404s on retired model IDs). Keep this list to
@@ -1519,183 +1530,102 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         initializeNewSession(profile, customPrompt);
     }
 
-    try {
-        const session = await client.live.connect({
-            model: GEMINI_LIVE_MODEL,
-            callbacks: {
-                onopen: function () {
-                    sessionReadyAt = Date.now();
-                    sendToRenderer('update-status', 'Live session connected');
-                },
-                onmessage: function (message) {
-                    console.log('----------------', message);
-
-                    // Handle input transcription (what was spoken)
-                    // Each chunk resets the silence timer — Groq fires ~700ms after user stops speaking,
-                    // long before Gemini finishes generating its audio response.
-                    if (message.serverContent?.inputTranscription?.results) {
-                        currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
-                        scheduleGroqTrigger();
-                    } else if (message.serverContent?.inputTranscription?.text) {
-                        const text = message.serverContent.inputTranscription.text;
-                        if (text.trim() !== '') {
-                            currentTranscription += text;
-                            scheduleGroqTrigger();
-                        }
-                    }
-
-                    // DISABLED: Gemini's outputTranscription - using Groq for faster responses instead
-                    // if (message.serverContent?.outputTranscription?.text) { ... }
-
-
-
-                    if (message.serverContent?.turnComplete) {
-                        sendToRenderer('update-status', 'Listening...');
-                        // Cancel any pending silence timer — turnComplete is the definitive end of turn
-                        if (transcriptionSilenceTimer) {
-                            clearTimeout(transcriptionSilenceTimer);
-                            transcriptionSilenceTimer = null;
-                        }
-                        // Fallback: if silence timer didn't already fire (e.g. no transcription events came through)
-                        if (currentTranscription.trim() !== '') {
-                            routeAnswer(currentTranscription);
-                            currentTranscription = '';
-                        }
-                    }
-                },
-                onerror: function (e) {
-                    console.log('Session error:', e.message);
-                    sendToRenderer('update-status', 'Error: ' + e.message);
-                },
-                onclose: function (e) {
-                    console.log('Session closed:', e.reason);
-
-                    // Don't reconnect if user intentionally closed
-                    if (isUserClosing) {
-                        isUserClosing = false;
-                        sendToRenderer('update-status', 'Session closed');
-                        return;
-                    }
-
-                    // Attempt reconnection
-                    if (sessionParams && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                        attemptReconnect();
-                    } else {
-                        sendToRenderer('update-status', 'Session closed');
-                    }
-                },
-            },
-            config: {
-                responseModalities: [Modality.AUDIO],
-                proactivity: { proactiveAudio: true },
-                outputAudioTranscription: {},
-                tools: enabledTools,
-                // Enable speaker diarization
-                inputAudioTranscription: {
-                    enableSpeakerDiarization: true,
-                    minSpeakerCount: 2,
-                    maxSpeakerCount: 2,
-                },
-                contextWindowCompression: { slidingWindow: {} },
-                speechConfig: { languageCode: language },
-                systemInstruction: {
-                    parts: [{ text: systemPrompt }],
-                },
-            },
-        });
-
-        isInitializingSession = false;
-        if (!isReconnect) {
-            sendToRenderer('session-initializing', false);
-        }
-        return session;
-    } catch (error) {
-        console.error('Failed to initialize Gemini session (first attempt):', error);
-        // If the configured model is no longer available, try a fallback model
-        if (isModelNotFoundError(error) && GEMINI_FALLBACK_MODEL) {
-            try {
-                console.log('Attempting to reconnect using fallback model:', GEMINI_FALLBACK_MODEL);
-                const session = await client.live.connect({
-                    model: GEMINI_FALLBACK_MODEL,
-                    callbacks: {
-                        onopen: function () {
-                            sessionReadyAt = Date.now();
-                            sendToRenderer('update-status', 'Live session connected (fallback)');
-                        },
-                        onmessage: function (message) {
-                            console.log('----------------', message);
-                            if (message.serverContent?.inputTranscription?.results) {
-                                currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
-                                scheduleGroqTrigger();
-                            } else if (message.serverContent?.inputTranscription?.text) {
-                                const text = message.serverContent.inputTranscription.text;
-                                if (text.trim() !== '') {
-                                    currentTranscription += text;
-                                    scheduleGroqTrigger();
-                                }
-                            }
-                            if (message.serverContent?.turnComplete) {
-                                sendToRenderer('update-status', 'Listening...');
-                                if (transcriptionSilenceTimer) {
-                                    clearTimeout(transcriptionSilenceTimer);
-                                    transcriptionSilenceTimer = null;
-                                }
-                                if (currentTranscription.trim() !== '') {
-                                    routeAnswer(currentTranscription);
-                                    currentTranscription = '';
-                                }
-                            }
-                        },
-                        onerror: function (e) {
-                            console.log('Session error:', e.message);
-                            sendToRenderer('update-status', 'Error: ' + e.message);
-                        },
-                        onclose: function (e) {
-                            console.log('Session closed:', e.reason);
-                            if (isUserClosing) {
-                                isUserClosing = false;
-                                sendToRenderer('update-status', 'Session closed');
-                                return;
-                            }
-                            if (sessionParams && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                                attemptReconnect();
-                            } else {
-                                sendToRenderer('update-status', 'Session closed');
-                            }
-                        },
-                    },
-                    config: {
-                        responseModalities: [Modality.AUDIO],
-                        proactivity: { proactiveAudio: true },
-                        outputAudioTranscription: {},
-                        tools: enabledTools,
-                        inputAudioTranscription: {
-                            enableSpeakerDiarization: true,
-                            minSpeakerCount: 2,
-                            maxSpeakerCount: 2,
-                        },
-                        contextWindowCompression: { slidingWindow: {} },
-                        speechConfig: { languageCode: language },
-                        systemInstruction: {
-                            parts: [{ text: systemPrompt }],
-                        },
-                    },
-                });
-
-                isInitializingSession = false;
-                if (!isReconnect) sendToRenderer('session-initializing', false);
-                return session;
-            } catch (err2) {
-                console.error('Fallback model connect failed:', err2);
+    // Callbacks + config are identical for every candidate model.
+    const callbacks = {
+        onopen: function () {
+            sessionReadyAt = Date.now();
+            sendToRenderer('update-status', 'Live session connected');
+        },
+        onmessage: function (message) {
+            // Handle input transcription (what was spoken). Each chunk resets the
+            // silence timer — Groq fires shortly after the user stops speaking.
+            if (message.serverContent?.inputTranscription?.results) {
+                currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
+                scheduleGroqTrigger();
+            } else if (message.serverContent?.inputTranscription?.text) {
+                const text = message.serverContent.inputTranscription.text;
+                if (text.trim() !== '') {
+                    currentTranscription += text;
+                    scheduleGroqTrigger();
+                }
             }
+
+            if (message.serverContent?.turnComplete) {
+                sendToRenderer('update-status', 'Listening...');
+                if (transcriptionSilenceTimer) {
+                    clearTimeout(transcriptionSilenceTimer);
+                    transcriptionSilenceTimer = null;
+                }
+                if (currentTranscription.trim() !== '') {
+                    routeAnswer(currentTranscription);
+                    currentTranscription = '';
+                }
+            }
+        },
+        onerror: function (e) {
+            console.log('Session error:', e.message);
+            sendToRenderer('update-status', 'Error: ' + e.message);
+        },
+        onclose: function (e) {
+            console.log('Session closed:', e.reason);
+            if (isUserClosing) {
+                isUserClosing = false;
+                sendToRenderer('update-status', 'Session closed');
+                return;
+            }
+            if (sessionParams && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                attemptReconnect();
+            } else {
+                sendToRenderer('update-status', 'Session closed');
+            }
+        },
+    };
+
+    const liveConfig = {
+        responseModalities: [Modality.AUDIO],
+        proactivity: { proactiveAudio: true },
+        outputAudioTranscription: {},
+        tools: enabledTools,
+        // Enable speaker diarization
+        inputAudioTranscription: {
+            enableSpeakerDiarization: true,
+            minSpeakerCount: 2,
+            maxSpeakerCount: 2,
+        },
+        contextWindowCompression: { slidingWindow: {} },
+        speechConfig: { languageCode: language },
+        systemInstruction: {
+            parts: [{ text: systemPrompt }],
+        },
+    };
+
+    // Try each candidate native-audio model until one connects. Dated preview
+    // models get retired, which previously killed audio silently — the chain plus
+    // a clear error message prevents that from being invisible again.
+    let session = null;
+    let lastErr = null;
+    for (const liveModel of GEMINI_LIVE_MODELS) {
+        try {
+            console.log('[Gemini] connecting live session with model:', liveModel);
+            session = await client.live.connect({ model: liveModel, callbacks, config: liveConfig });
+            console.log('[Gemini] live session connected:', liveModel);
+            break;
+        } catch (err) {
+            lastErr = err;
+            console.error(`[Gemini] live.connect failed for ${liveModel}:`, err && (err.message || err));
         }
-        console.error('Failed to initialize Gemini session:', error);
-        isInitializingSession = false;
-        if (!isReconnect) {
-            sendToRenderer('session-initializing', false);
-        }
+    }
+
+    isInitializingSession = false;
+    if (!isReconnect) sendToRenderer('session-initializing', false);
+
+    if (!session) {
+        const msg = (lastErr && (lastErr.message || String(lastErr))) || 'unknown error';
+        console.error('[Gemini] All live audio models failed to connect:', msg);
+        sendToRenderer('update-status', '⚠️ Live audio session could not start — audio answers are unavailable (' + msg + '). Screenshots still work; check your Gemini API key/quota.');
         return null;
     }
+    return session;
 }
 
 async function attemptReconnect() {
