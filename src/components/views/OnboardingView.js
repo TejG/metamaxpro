@@ -142,12 +142,168 @@ export class OnboardingView extends LitElement {
         .btn-back:hover {
             color: #555555;
         }
+
+        .slide-wide {
+            max-width: 460px;
+        }
+
+        /* Permission + shortcut cards */
+        .card-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+            margin-top: 4px;
+        }
+
+        .card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.65);
+            backdrop-filter: blur(8px);
+            text-align: left;
+        }
+
+        .card-icon {
+            flex: 0 0 34px;
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.06);
+            font-size: 17px;
+        }
+
+        .card-body {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #111111;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-desc {
+            font-size: 11px;
+            line-height: 1.4;
+            color: #666666;
+            margin-top: 2px;
+        }
+
+        .status-pill {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 999px;
+            white-space: nowrap;
+        }
+
+        .status-pill.granted {
+            background: rgba(34, 160, 90, 0.15);
+            color: #1c8a4e;
+        }
+
+        .status-pill.needed {
+            background: rgba(210, 140, 20, 0.15);
+            color: #b5760a;
+        }
+
+        .card-actions {
+            flex: 0 0 auto;
+            display: flex;
+            gap: 6px;
+        }
+
+        .btn-ghost {
+            background: rgba(0, 0, 0, 0.06);
+            border: none;
+            color: #111111;
+            padding: 6px 12px;
+            border-radius: 7px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+
+        .btn-ghost:hover {
+            background: rgba(0, 0, 0, 0.12);
+        }
+
+        /* Keyboard shortcut rows */
+        .shortcut-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.65);
+            backdrop-filter: blur(8px);
+            text-align: left;
+        }
+
+        .shortcut-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #111111;
+        }
+
+        .shortcut-sub {
+            font-size: 11px;
+            color: #666666;
+            margin-top: 2px;
+        }
+
+        .keys {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        .key {
+            min-width: 26px;
+            height: 26px;
+            padding: 0 7px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            background: #111111;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+        }
+
+        .hint {
+            font-size: 11px;
+            color: #888888;
+            margin-top: 2px;
+        }
     `;
 
     static properties = {
         currentSlide: { type: Number },
         contextText: { type: String },
         onComplete: { type: Function },
+        permStatus: { type: Object },
     };
 
     constructor() {
@@ -157,11 +313,43 @@ export class OnboardingView extends LitElement {
         this.onComplete = () => {};
         this._animId = null;
         this._time = 0;
+        this.isMac = (typeof process !== 'undefined') && process.platform === 'darwin';
+        this.isWindows = (typeof process !== 'undefined') && process.platform === 'win32';
+        this.permStatus = { screen: 'unknown', microphone: 'unknown' };
     }
 
     firstUpdated() {
         this._startAurora();
         this._drawDither();
+        this.refreshPermissions();
+    }
+
+    get _ipc() {
+        try { return require('electron').ipcRenderer; } catch (_) { return null; }
+    }
+
+    async refreshPermissions() {
+        const ipc = this._ipc;
+        if (!ipc) return;
+        try {
+            const status = await ipc.invoke('permissions:get-status');
+            if (status) this.permStatus = status;
+        } catch (e) {
+            console.error('Failed to load permission status:', e);
+        }
+    }
+
+    async openSettings(which) {
+        const ipc = this._ipc;
+        if (ipc) await ipc.invoke('permissions:open-settings', which);
+        // Re-check shortly after the user visits Settings.
+        setTimeout(() => this.refreshPermissions(), 1200);
+    }
+
+    async requestMic() {
+        const ipc = this._ipc;
+        if (ipc) await ipc.invoke('permissions:request-microphone');
+        this.refreshPermissions();
     }
 
     disconnectedCallback() {
@@ -308,19 +496,132 @@ export class OnboardingView extends LitElement {
         this.onComplete();
     }
 
-    renderSlide() {
-        if (this.currentSlide === 0) {
-            return html`
-                <div class="slide">
-                    <div class="slide-title">Meta Booster Pro</div>
-                    <div class="slide-text">Real-time AI that listens, watches, and helps during interviews, meetings, and exams.</div>
-                    <div class="actions">
-                        <button class="btn-primary" @click=${() => { this.currentSlide = 1; }}>Continue</button>
+    _statusPill(status) {
+        const granted = status === 'granted';
+        return html`<span class="status-pill ${granted ? 'granted' : 'needed'}">${granted ? 'Granted' : 'Needs access'}</span>`;
+    }
+
+    _keys(combo) {
+        // combo is an array of key labels rendered as badges, aligned right.
+        return html`<div class="keys">${combo.map(k => html`<span class="key">${k}</span>`)}</div>`;
+    }
+
+    renderWelcome() {
+        return html`
+            <div class="slide">
+                <div class="slide-title">Meta Booster Pro</div>
+                <div class="slide-text">Real-time AI that listens, watches, and helps during interviews, meetings, and exams.</div>
+                <div class="actions">
+                    <button class="btn-primary" @click=${() => { this.currentSlide = 1; }}>Continue</button>
+                </div>
+            </div>
+        `;
+    }
+
+    renderPermissions() {
+        const mic = this.permStatus.microphone;
+        const screen = this.permStatus.screen;
+
+        const macCards = html`
+            <div class="card">
+                <div class="card-icon">🎬</div>
+                <div class="card-body">
+                    <div class="card-title">Screen Recording ${this._statusPill(screen)}</div>
+                    <div class="card-desc">Lets the app see your screen and capture meeting audio. Required for answers.</div>
+                </div>
+                <div class="card-actions">
+                    <button class="btn-ghost" @click=${() => this.openSettings('screen')}>Open Settings</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-icon">🎙️</div>
+                <div class="card-body">
+                    <div class="card-title">Microphone ${this._statusPill(mic)}</div>
+                    <div class="card-desc">Lets the app hear you (for “mic” and “both” audio modes).</div>
+                </div>
+                <div class="card-actions">
+                    <button class="btn-ghost" @click=${() => this.requestMic()}>Allow</button>
+                    <button class="btn-ghost" @click=${() => this.openSettings('microphone')}>Open Settings</button>
+                </div>
+            </div>
+        `;
+
+        const winCards = html`
+            <div class="card">
+                <div class="card-icon">🎙️</div>
+                <div class="card-body">
+                    <div class="card-title">Microphone ${this._statusPill(mic)}</div>
+                    <div class="card-desc">Turn on microphone access so the app can hear your questions.</div>
+                </div>
+                <div class="card-actions">
+                    <button class="btn-ghost" @click=${() => this.openSettings('microphone')}>Open Settings</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-icon">🖥️</div>
+                <div class="card-body">
+                    <div class="card-title">Screen &amp; audio capture ${this._statusPill('granted')}</div>
+                    <div class="card-desc">No extra permission needed on Windows — capture starts automatically.</div>
+                </div>
+            </div>
+        `;
+
+        return html`
+            <div class="slide slide-wide">
+                <div class="slide-title">Enable permissions</div>
+                <div class="slide-text">
+                    ${this.isMac
+                        ? 'macOS needs your OK for the app to see the screen and hear audio. Grant both below, then come back.'
+                        : 'Allow microphone access so the app can hear you. Screen capture works automatically.'}
+                </div>
+                <div class="card-list">
+                    ${this.isMac ? macCards : winCards}
+                </div>
+                <div class="hint">
+                    ${this.isMac
+                        ? 'After toggling a permission in Settings you may need to restart the app.'
+                        : 'You can change this anytime in Windows Settings ▸ Privacy.'}
+                </div>
+                <div class="actions">
+                    <button class="btn-primary" @click=${() => { this.refreshPermissions(); this.currentSlide = 2; }}>Continue</button>
+                    <button class="btn-back" @click=${() => { this.currentSlide = 0; }}>Back</button>
+                </div>
+            </div>
+        `;
+    }
+
+    renderShortcuts() {
+        const mod = this.isMac ? '⌘' : 'Ctrl';
+        return html`
+            <div class="slide slide-wide">
+                <div class="slide-title">Two shortcuts to know</div>
+                <div class="slide-text">These work globally — even when the app is hidden or another window is focused.</div>
+                <div class="card-list">
+                    <div class="shortcut-row">
+                        <div>
+                            <div class="shortcut-label">Show / hide the app</div>
+                            <div class="shortcut-sub">Instantly toggle the overlay out of sight.</div>
+                        </div>
+                        ${this._keys([mod, '\\'])}
+                    </div>
+                    <div class="shortcut-row">
+                        <div>
+                            <div class="shortcut-label">Answer now</div>
+                            <div class="shortcut-sub">Analyze what's on screen and reply immediately.</div>
+                        </div>
+                        ${this._keys([mod, '↵'])}
                     </div>
                 </div>
-            `;
-        }
+                <div class="hint">See all shortcuts anytime in Help.</div>
+                <div class="actions">
+                    <button class="btn-primary" @click=${() => { this.currentSlide = 3; }}>Continue</button>
+                    <button class="btn-back" @click=${() => { this.currentSlide = 1; }}>Back</button>
+                </div>
+            </div>
+        `;
+    }
 
+    renderContext() {
         return html`
             <div class="slide">
                 <div class="slide-title">Add context</div>
@@ -333,10 +634,19 @@ export class OnboardingView extends LitElement {
                 ></textarea>
                 <div class="actions">
                     <button class="btn-primary" @click=${this.completeOnboarding}>Get Started</button>
-                    <button class="btn-back" @click=${() => { this.currentSlide = 0; }}>Back</button>
+                    <button class="btn-back" @click=${() => { this.currentSlide = 2; }}>Back</button>
                 </div>
             </div>
         `;
+    }
+
+    renderSlide() {
+        switch (this.currentSlide) {
+            case 0: return this.renderWelcome();
+            case 1: return this.renderPermissions();
+            case 2: return this.renderShortcuts();
+            default: return this.renderContext();
+        }
     }
 
     render() {

@@ -345,6 +345,54 @@ function setupGeneralIpcHandlers() {
         }
     });
 
+    // ── Onboarding permissions ──────────────────────────────────────────
+    // Report current OS permission status so the onboarding UI can show which
+    // ones still need granting. On Windows there's no screen-recording gate.
+    ipcMain.handle('permissions:get-status', async () => {
+        if (process.platform !== 'darwin') {
+            return { platform: process.platform, screen: 'granted', microphone: 'unknown' };
+        }
+        const { systemPreferences } = require('electron');
+        let screen = 'unknown';
+        let microphone = 'unknown';
+        try { screen = systemPreferences.getMediaAccessStatus('screen'); } catch (_) {}
+        try { microphone = systemPreferences.getMediaAccessStatus('microphone'); } catch (_) {}
+        return { platform: 'darwin', screen, microphone };
+    });
+
+    // Trigger the native microphone prompt (macOS only; no-op elsewhere).
+    ipcMain.handle('permissions:request-microphone', async () => {
+        if (process.platform !== 'darwin') return { granted: true };
+        try {
+            const { systemPreferences } = require('electron');
+            const granted = await systemPreferences.askForMediaAccess('microphone');
+            return { granted };
+        } catch (error) {
+            return { granted: false, error: error.message };
+        }
+    });
+
+    // Open the relevant OS privacy settings pane. `which` is 'screen' | 'microphone'.
+    ipcMain.handle('permissions:open-settings', async (event, which) => {
+        try {
+            let url;
+            if (process.platform === 'darwin') {
+                url = which === 'microphone'
+                    ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+                    : 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+            } else if (process.platform === 'win32') {
+                url = which === 'microphone' ? 'ms-settings:privacy-microphone' : 'ms-settings:privacy-webcam';
+            } else {
+                url = 'https://support.google.com/'; // Linux: no standard pane
+            }
+            await shell.openExternal(url);
+            return { success: true };
+        } catch (error) {
+            console.error('Error opening settings pane:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.on('update-keybinds', (event, newKeybinds) => {
         if (mainWindow) {
             // Also save to storage
