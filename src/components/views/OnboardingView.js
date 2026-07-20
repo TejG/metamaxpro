@@ -396,11 +396,13 @@ export class OnboardingView extends LitElement {
         try { return require('electron').ipcRenderer; } catch (_) { return null; }
     }
 
-    // Screen Recording is the permission the app truly cannot work without
-    // (screenshots + system-audio capture). Mic is recommended, not gating.
+    // On macOS both Screen Recording (screenshots + system-audio capture) and
+    // Microphone are required — the user can't leave the permissions step until
+    // both are granted. "Open Settings" is always available as an escape hatch
+    // (they can toggle either there even if the native prompt was dismissed).
     get requiredGranted() {
         if (!this.isMac) return true;
-        return this.permStatus.screen === 'granted';
+        return this.permStatus.screen === 'granted' && this.permStatus.microphone === 'granted';
     }
 
     async refreshPermissions() {
@@ -521,7 +523,7 @@ export class OnboardingView extends LitElement {
                 <div class="card-icon">🎙️</div>
                 <div class="card-body">
                     <div class="card-title">Microphone ${this._statusPill(mic)}</div>
-                    <div class="card-desc">Recommended. Lets MetaQuest hear you in “mic” and “both” audio modes.</div>
+                    <div class="card-desc">Required. Lets MetaQuest hear you in “mic” and “both” audio modes.</div>
                 </div>
                 <div class="card-actions">
                     <button class="btn-ghost" @click=${() => this.requestMic()}>Allow</button>
@@ -619,7 +621,7 @@ export class OnboardingView extends LitElement {
                         <h1 class="left-title">${copy.title}</h1>
                         <p class="left-sub">${copy.sub}</p>
 
-                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording is required. Open Settings, enable MetaQuest, then return here — this unlocks automatically.</div>` : ''}
+                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording and Microphone are both required. Enable them for MetaQuest in Settings, then return here — this unlocks automatically.</div>` : ''}
 
                         <div class="left-actions">
                             <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>

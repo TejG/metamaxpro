@@ -922,15 +922,15 @@ export class MetaMaxProApp extends LitElement {
     }
 
     // True when every OS permission the app can't work without is granted.
-    // On macOS that's Screen Recording (screenshots + system-audio capture);
-    // other platforms have no hard gate.
+    // On macOS that's Screen Recording (screenshots + system-audio capture) AND
+    // Microphone; other platforms have no hard gate.
     async _permissionsSatisfied() {
         try {
             if (!window.require) return true;
             const { ipcRenderer } = window.require('electron');
             const status = await ipcRenderer.invoke('permissions:get-status');
             if (!status || status.platform !== 'darwin') return true;
-            return status.screen === 'granted';
+            return status.screen === 'granted' && status.microphone === 'granted';
         } catch (e) {
             // If we can't determine status, don't lock the user out.
             return true;
