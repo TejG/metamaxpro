@@ -50,16 +50,14 @@ app.whenReady().then(async () => {
         const { desktopCapturer, systemPreferences } = require('electron');
         // Screen Recording — used for screenshots AND system-audio capture.
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
-        // Microphone — request explicitly (no-op if already granted).
+        // Microphone — DON'T request here. macOS only shows the native prompt
+        // once, and at startup the always-on-top overlay covers it. The
+        // onboarding "Allow" button requests it while the window is a normal,
+        // reachable window, so the prompt is actually visible.
         try {
-            const micStatus = systemPreferences.getMediaAccessStatus('microphone');
-            console.log('[Permissions] microphone status:', micStatus);
-            if (micStatus !== 'granted') {
-                const granted = await systemPreferences.askForMediaAccess('microphone');
-                console.log('[Permissions] microphone access granted:', granted);
-            }
+            console.log('[Permissions] microphone status:', systemPreferences.getMediaAccessStatus('microphone'));
         } catch (e) {
-            console.error('[Permissions] microphone request failed:', e && e.message ? e.message : e);
+            console.error('[Permissions] microphone status check failed:', e && e.message ? e.message : e);
         }
         try {
             console.log('[Permissions] screen recording status:', systemPreferences.getMediaAccessStatus('screen'));

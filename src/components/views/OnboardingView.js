@@ -42,6 +42,18 @@ export class OnboardingView extends LitElement {
             color: #f2f2f4;
             border-radius: 12px;
             overflow: hidden;
+            /* Frameless window has no title bar — let the user drag it aside
+               (needed during onboarding to reach System Settings). Interactive
+               controls opt out with -webkit-app-region: no-drag below. */
+            -webkit-app-region: drag;
+        }
+
+        .btn-primary,
+        .btn-back,
+        .btn-ghost,
+        .context-input,
+        .card-actions {
+            -webkit-app-region: no-drag;
         }
 
         /* ── Left pane: brand + step controls ── */

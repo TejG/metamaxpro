@@ -492,14 +492,37 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     });
 
     // ── View / layout changes ───────────────────────────────────
+    // Re-apply the always-on-top overlay behaviour used everywhere except
+    // onboarding (screen-saver level on Windows, floating on macOS).
+    const restoreOverlayMode = win => {
+        try { win.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating', 1); } catch (_) { win.setAlwaysOnTop(true); }
+        try { win.setContentProtection(true); } catch (_) {}
+        try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+    };
+
     ipcMain.on('view-changed', (event, view) => {
         if (!mainWindow.isDestroyed()) {
             currentView = view || 'main';
 
-            if (view === 'assistant') {
+            if (view === 'onboarding') {
+                // Onboarding requires the user to reach System Settings and the
+                // native permission prompts. A screen-saver-level, always-on-top,
+                // content-protected overlay covers those dialogs and can't be
+                // dragged aside — so while onboarding, drop to a normal, movable,
+                // non-topmost window that the user can move out of the way.
+                applyMainWindowSize(mainWindow, 'main');
+                mainWindow.setIgnoreMouseEvents(false);
+                try { mainWindow.setAlwaysOnTop(false); } catch (_) {}
+                try { mainWindow.setContentProtection(false); } catch (_) {}
+                try { mainWindow.setVisibleOnAllWorkspaces(false); } catch (_) {}
+                try { mainWindow.setMovable(true); } catch (_) {}
+                mainWindow.focus();
+            } else if (view === 'assistant') {
+                restoreOverlayMode(mainWindow);
                 // Shrink window for live view
                 applyMainWindowSize(mainWindow, 'assistant');
             } else {
+                restoreOverlayMode(mainWindow);
                 // Restore full size
                 applyMainWindowSize(mainWindow, 'main');
                 mainWindow.setIgnoreMouseEvents(false);
