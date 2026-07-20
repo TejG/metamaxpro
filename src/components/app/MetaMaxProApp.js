@@ -519,6 +519,7 @@ export class MetaMaxProApp extends LitElement {
         _storageLoaded: { state: true },
         _updateAvailable: { state: true },
         _whisperDownloading: { state: true },
+        _onboardingGate: { state: true },
     };
 
     constructor() {
@@ -568,8 +569,19 @@ export class MetaMaxProApp extends LitElement {
                 metaMaxPro.storage.getPreferences()
             ]);
 
-            // Home is the chat surface; onboarding still gates first run.
-            this.currentView = config.onboarded ? 'assistant' : 'onboarding';
+            // Decide the entry view. Onboarding gates the first run AND any later
+            // launch where a required OS permission is missing (e.g. the user
+            // revoked Screen Recording) — the app can't work without it.
+            const permsOK = await this._permissionsSatisfied();
+            if (!config.onboarded) {
+                this._onboardingGate = false;
+                this.currentView = 'onboarding';
+            } else if (!permsOK) {
+                this._onboardingGate = true; // jump straight to permissions
+                this.currentView = 'onboarding';
+            } else {
+                this.currentView = 'assistant';
+            }
             this.selectedProfile = prefs.selectedProfile || 'interview';
             this.selectedLanguage = prefs.selectedLanguage || 'en-US';
             this.selectedScreenshotInterval = prefs.selectedScreenshotInterval || '5';
@@ -587,8 +599,9 @@ export class MetaMaxProApp extends LitElement {
 
             // Auto-start the session so the chat is immediately usable. If no
             // provider is configured, handleStart bails and the chat shows a
-            // "configure in Settings" banner (sessionActive stays false).
-            if (config.onboarded && !this.sessionActive) {
+            // "configure in Settings" banner (sessionActive stays false). Skip
+            // when we're showing onboarding (first run or permission re-gate).
+            if (this.currentView === 'assistant' && !this.sessionActive) {
                 this.handleStart();
             }
         } catch (error) {
@@ -611,11 +624,17 @@ export class MetaMaxProApp extends LitElement {
             ipcRenderer.on('reconnect-failed', (_, data) => this.addNewResponse(data.message));
             ipcRenderer.on('whisper-downloading', (_, downloading) => { this._whisperDownloading = downloading; });
         }
+
+        // If a required permission gets revoked while running, catch it when the
+        // window is focused again and route back to onboarding.
+        this._onFocus = () => this._recheckPermissionsOnFocus();
+        window.addEventListener('focus', this._onFocus);
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         this._stopTimer();
+        if (this._onFocus) window.removeEventListener('focus', this._onFocus);
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.removeAllListeners('new-response');
@@ -897,8 +916,38 @@ export class MetaMaxProApp extends LitElement {
     }
 
     handleOnboardingComplete() {
+        this._onboardingGate = false;
         this.currentView = 'assistant';
         this.handleStart();
+    }
+
+    // True when every OS permission the app can't work without is granted.
+    // On macOS that's Screen Recording (screenshots + system-audio capture);
+    // other platforms have no hard gate.
+    async _permissionsSatisfied() {
+        try {
+            if (!window.require) return true;
+            const { ipcRenderer } = window.require('electron');
+            const status = await ipcRenderer.invoke('permissions:get-status');
+            if (!status || status.platform !== 'darwin') return true;
+            return status.screen === 'granted';
+        } catch (e) {
+            // If we can't determine status, don't lock the user out.
+            return true;
+        }
+    }
+
+    // Re-check when the window regains focus: if a required permission was
+    // revoked (in System Settings) while we were running, send the user back to
+    // onboarding to restore it before continuing.
+    async _recheckPermissionsOnFocus() {
+        if (this.currentView === 'onboarding') return; // already handling it
+        const ok = await this._permissionsSatisfied();
+        if (!ok) {
+            this.handleClose();
+            this._onboardingGate = true;
+            this.currentView = 'onboarding';
+        }
     }
 
     updated(changedProperties) {
@@ -923,6 +972,7 @@ export class MetaMaxProApp extends LitElement {
             case 'onboarding':
                 return html`
                     <onboarding-view
+                        .gateMode=${!!this._onboardingGate}
                         .onComplete=${() => this.handleOnboardingComplete()}
                         .onClose=${() => this.handleClose()}
                     ></onboarding-view>

@@ -1,5 +1,18 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 
+/**
+ * Two-pane, step-by-step onboarding.
+ *  - Left pane: brand (mascot + name), the current step's title/subtitle, and the
+ *    Continue/Back controls + terms.
+ *  - Right pane: the current step's instructions (permissions, shortcuts, context).
+ *
+ * Permissions are GATED: on macOS the user cannot leave the permissions step until
+ * Screen Recording is granted (the app can't see the screen or capture audio
+ * without it). Status is polled so the gate opens the moment it's granted in
+ * System Settings. `gateMode` is used when we re-show onboarding because a
+ * required permission was revoked — it jumps straight to permissions and finishes
+ * as soon as they're restored, without repeating the rest of the flow.
+ */
 export class OnboardingView extends LitElement {
     static styles = css`
         * {
@@ -24,286 +37,332 @@ export class OnboardingView extends LitElement {
         .onboarding {
             width: 100%;
             height: 100%;
-            position: relative;
             display: flex;
-            align-items: center;
-            justify-content: center;
+            background: #0a0a0c;
+            color: #f2f2f4;
             border-radius: 12px;
-            border: 1px solid rgba(0, 0, 0, 0.08);
             overflow: hidden;
-            background: #f0f0f0;
         }
 
-        canvas.aurora {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 0;
-        }
-
-        canvas.dither {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-            opacity: 0.12;
-            mix-blend-mode: overlay;
-            pointer-events: none;
-            image-rendering: pixelated;
-        }
-
-        .slide {
-            position: relative;
-            z-index: 2;
+        /* ── Left pane: brand + step controls ── */
+        .pane-left {
+            flex: 0 0 42%;
+            max-width: 460px;
             display: flex;
             flex-direction: column;
+            padding: 32px 36px;
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .brand {
+            display: flex;
             align-items: center;
-            text-align: center;
-            max-width: 400px;
-            padding: var(--space-xl);
-            gap: var(--space-md);
+            gap: 10px;
         }
 
-        .slide-title {
-            font-size: 28px;
-            font-weight: 600;
-            color: #111111;
-            line-height: 1.2;
+        .brand-logo {
+            width: 32px;
+            height: 32px;
+            object-fit: contain;
         }
 
-        .slide-text {
-            font-size: 13px;
-            line-height: 1.5;
-            color: #666666;
+        .brand-name {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
         }
 
-        .context-input {
-            width: 100%;
-            min-height: 120px;
-            padding: 12px;
-            border: 1px solid rgba(0, 0, 0, 0.12);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(8px);
-            color: #111111;
-            font-size: 13px;
-            font-family: var(--font);
-            line-height: 1.5;
-            resize: vertical;
-            text-align: left;
-        }
-
-        .context-input::placeholder {
-            color: #999999;
-        }
-
-        .context-input:focus {
-            outline: none;
-            border-color: rgba(0, 0, 0, 0.3);
-        }
-
-        .actions {
+        .left-body {
+            flex: 1 1 auto;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            gap: 8px;
+            justify-content: center;
+            gap: 14px;
+        }
+
+        .left-title {
+            font-size: 32px;
+            font-weight: 700;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+
+        .left-sub {
+            font-size: 14px;
+            line-height: 1.55;
+            color: #9a9aa2;
+            max-width: 340px;
+        }
+
+        .left-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
             margin-top: 8px;
+            max-width: 340px;
         }
 
         .btn-primary {
-            background: #111111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            background: linear-gradient(180deg, #6ea8ff 0%, #4f8cf5 100%);
             border: none;
             color: #ffffff;
-            padding: 10px 32px;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 500;
+            padding: 13px 24px;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
             cursor: pointer;
-            transition: opacity 0.15s;
+            transition: opacity 0.15s, filter 0.15s;
         }
 
         .btn-primary:hover {
-            opacity: 0.85;
+            filter: brightness(1.06);
+        }
+
+        .btn-primary[disabled] {
+            opacity: 0.4;
+            cursor: not-allowed;
+            filter: none;
         }
 
         .btn-back {
             background: none;
             border: none;
-            color: #888888;
-            font-size: 11px;
+            color: #8a8a92;
+            font-size: 13px;
             cursor: pointer;
-            padding: 4px 8px;
+            padding: 6px;
+            align-self: center;
         }
 
         .btn-back:hover {
-            color: #555555;
+            color: #c8c8ce;
         }
 
-        .slide-wide {
-            max-width: 460px;
+        .gate-hint {
+            font-size: 12px;
+            color: #d8a24a;
+            line-height: 1.4;
+            max-width: 340px;
         }
 
-        /* Permission + shortcut cards */
+        .terms {
+            font-size: 11px;
+            line-height: 1.5;
+            color: #6c6c74;
+        }
+
+        .steps-dots {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+
+        .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.15);
+            transition: background 0.2s, width 0.2s;
+        }
+
+        .dot.active {
+            width: 20px;
+            border-radius: 4px;
+            background: #4f8cf5;
+        }
+
+        .dot.done {
+            background: #1c8a4e;
+        }
+
+        /* ── Right pane: step content ── */
+        .pane-right {
+            flex: 1 1 auto;
+            padding: 40px 44px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 14px;
+            background:
+                radial-gradient(120% 120% at 100% 0%, rgba(79, 140, 245, 0.08) 0%, transparent 55%),
+                linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 100% 34px,
+                #0c0c10;
+            overflow-y: auto;
+        }
+
+        .right-eyebrow {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #6f7bd8;
+        }
+
+        .right-heading {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
         .card-list {
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            width: 100%;
+            gap: 12px;
             margin-top: 4px;
         }
 
         .card {
             display: flex;
             align-items: center;
-            gap: 12px;
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.65);
-            backdrop-filter: blur(8px);
-            text-align: left;
+            gap: 14px;
+            padding: 14px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .card.ok {
+            border-color: rgba(34, 160, 90, 0.4);
+            background: rgba(34, 160, 90, 0.06);
         }
 
         .card-icon {
-            flex: 0 0 34px;
-            width: 34px;
-            height: 34px;
-            border-radius: 8px;
+            flex: 0 0 40px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(0, 0, 0, 0.06);
-            font-size: 17px;
+            background: rgba(255, 255, 255, 0.06);
+            font-size: 19px;
         }
 
-        .card-body {
-            flex: 1 1 auto;
-            min-width: 0;
-        }
+        .card-body { flex: 1 1 auto; min-width: 0; }
 
         .card-title {
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
-            color: #111111;
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
         .card-desc {
-            font-size: 11px;
-            line-height: 1.4;
-            color: #666666;
-            margin-top: 2px;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #9a9aa2;
+            margin-top: 3px;
         }
 
         .status-pill {
             font-size: 10px;
-            font-weight: 600;
+            font-weight: 700;
             padding: 2px 8px;
             border-radius: 999px;
             white-space: nowrap;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
 
-        .status-pill.granted {
-            background: rgba(34, 160, 90, 0.15);
-            color: #1c8a4e;
-        }
+        .status-pill.granted { background: rgba(34, 160, 90, 0.2); color: #4fd88b; }
+        .status-pill.needed { background: rgba(210, 150, 40, 0.18); color: #e0a94a; }
 
-        .status-pill.needed {
-            background: rgba(210, 140, 20, 0.15);
-            color: #b5760a;
-        }
-
-        .card-actions {
-            flex: 0 0 auto;
-            display: flex;
-            gap: 6px;
-        }
+        .card-actions { flex: 0 0 auto; display: flex; gap: 6px; }
 
         .btn-ghost {
-            background: rgba(0, 0, 0, 0.06);
+            background: rgba(255, 255, 255, 0.08);
             border: none;
-            color: #111111;
-            padding: 6px 12px;
-            border-radius: 7px;
-            font-size: 11px;
+            color: #f2f2f4;
+            padding: 7px 13px;
+            border-radius: 8px;
+            font-size: 12px;
             font-weight: 500;
             cursor: pointer;
             white-space: nowrap;
             transition: background 0.15s;
         }
 
-        .btn-ghost:hover {
-            background: rgba(0, 0, 0, 0.12);
-        }
+        .btn-ghost:hover { background: rgba(255, 255, 255, 0.16); }
 
-        /* Keyboard shortcut rows */
+        /* Shortcut rows */
         .shortcut-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 12px;
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.65);
-            backdrop-filter: blur(8px);
-            text-align: left;
+            padding: 14px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
         }
 
-        .shortcut-label {
-            font-size: 13px;
-            font-weight: 500;
-            color: #111111;
-        }
+        .shortcut-label { font-size: 14px; font-weight: 600; }
+        .shortcut-sub { font-size: 12px; color: #9a9aa2; margin-top: 3px; }
 
-        .shortcut-sub {
-            font-size: 11px;
-            color: #666666;
-            margin-top: 2px;
-        }
-
-        .keys {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            flex: 0 0 auto;
-        }
+        .keys { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 
         .key {
-            min-width: 26px;
-            height: 26px;
-            padding: 0 7px;
+            min-width: 28px;
+            height: 28px;
+            padding: 0 8px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 6px;
-            background: #111111;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.14);
             color: #ffffff;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
-            box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
         }
 
-        .hint {
-            font-size: 11px;
-            color: #888888;
-            margin-top: 2px;
+        .feature {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
         }
+
+        .feature-dot {
+            flex: 0 0 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-top: 6px;
+            background: #4f8cf5;
+        }
+
+        .feature-text { font-size: 13px; line-height: 1.5; color: #c8c8ce; }
+
+        .context-input {
+            width: 100%;
+            min-height: 160px;
+            padding: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            color: #f2f2f4;
+            font-size: 13px;
+            font-family: var(--font);
+            line-height: 1.5;
+            resize: vertical;
+        }
+
+        .context-input::placeholder { color: #6c6c74; }
+        .context-input:focus { outline: none; border-color: rgba(79, 140, 245, 0.6); }
     `;
 
     static properties = {
         currentSlide: { type: Number },
         contextText: { type: String },
         onComplete: { type: Function },
+        onClose: { type: Function },
         permStatus: { type: Object },
+        gateMode: { type: Boolean },
+        initialSlide: { type: Number },
     };
 
     constructor() {
@@ -311,21 +370,37 @@ export class OnboardingView extends LitElement {
         this.currentSlide = 0;
         this.contextText = '';
         this.onComplete = () => {};
-        this._animId = null;
-        this._time = 0;
+        this.onClose = () => {};
+        this.gateMode = false;
+        this.initialSlide = 0;
         this.isMac = (typeof process !== 'undefined') && process.platform === 'darwin';
         this.isWindows = (typeof process !== 'undefined') && process.platform === 'win32';
-        this.permStatus = { screen: 'unknown', microphone: 'unknown' };
+        this.permStatus = { platform: this.isMac ? 'darwin' : 'other', screen: 'unknown', microphone: 'unknown' };
+        this._pollTimer = null;
     }
 
     firstUpdated() {
-        this._startAurora();
-        this._drawDither();
+        this.currentSlide = this.gateMode ? 1 : (this.initialSlide || 0);
         this.refreshPermissions();
+        // Keep permission status live so the gate opens right after the user
+        // grants access in System Settings.
+        this._pollTimer = setInterval(() => this.refreshPermissions(), 1500);
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._pollTimer) clearInterval(this._pollTimer);
     }
 
     get _ipc() {
         try { return require('electron').ipcRenderer; } catch (_) { return null; }
+    }
+
+    // Screen Recording is the permission the app truly cannot work without
+    // (screenshots + system-audio capture). Mic is recommended, not gating.
+    get requiredGranted() {
+        if (!this.isMac) return true;
+        return this.permStatus.screen === 'granted';
     }
 
     async refreshPermissions() {
@@ -342,146 +417,13 @@ export class OnboardingView extends LitElement {
     async openSettings(which) {
         const ipc = this._ipc;
         if (ipc) await ipc.invoke('permissions:open-settings', which);
-        // Re-check shortly after the user visits Settings.
-        setTimeout(() => this.refreshPermissions(), 1200);
+        setTimeout(() => this.refreshPermissions(), 1000);
     }
 
     async requestMic() {
         const ipc = this._ipc;
         if (ipc) await ipc.invoke('permissions:request-microphone');
         this.refreshPermissions();
-    }
-
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._animId) cancelAnimationFrame(this._animId);
-    }
-
-    _drawDither() {
-        const canvas = this.shadowRoot.querySelector('canvas.dither');
-        if (!canvas) return;
-        const blockSize = 5;
-        const cols = Math.ceil(canvas.offsetWidth / blockSize);
-        const rows = Math.ceil(canvas.offsetHeight / blockSize);
-        canvas.width = cols;
-        canvas.height = rows;
-        const ctx = canvas.getContext('2d');
-        const img = ctx.createImageData(cols, rows);
-        for (let i = 0; i < img.data.length; i += 4) {
-            const v = Math.random() > 0.5 ? 255 : 0;
-            img.data[i] = v;
-            img.data[i + 1] = v;
-            img.data[i + 2] = v;
-            img.data[i + 3] = 255;
-        }
-        ctx.putImageData(img, 0, 0);
-    }
-
-    _startAurora() {
-        const canvas = this.shadowRoot.querySelector('canvas.aurora');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-
-        const scale = 0.35;
-        const resize = () => {
-            canvas.width = Math.floor(canvas.offsetWidth * scale);
-            canvas.height = Math.floor(canvas.offsetHeight * scale);
-        };
-        resize();
-
-        const blobs = [
-            { parts: [
-                { ox: 0, oy: 0, r: 1.0 },
-                { ox: 0.22, oy: 0.1, r: 0.85 },
-                { ox: 0.11, oy: 0.05, r: 0.5 },
-            ], color: [180, 200, 230], x: 0.15, y: 0.2, vx: 0.35, vy: 0.25, phase: 0 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.95 },
-                { ox: 0.18, oy: -0.08, r: 0.75 },
-                { ox: 0.09, oy: -0.04, r: 0.4 },
-            ], color: [190, 180, 220], x: 0.75, y: 0.2, vx: -0.3, vy: 0.35, phase: 1.2 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.9 },
-                { ox: 0.24, oy: 0.12, r: 0.9 },
-                { ox: 0.12, oy: 0.06, r: 0.35 },
-            ], color: [210, 195, 215], x: 0.5, y: 0.65, vx: 0.25, vy: -0.3, phase: 2.4 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.8 },
-                { ox: -0.15, oy: 0.18, r: 0.7 },
-                { ox: -0.07, oy: 0.09, r: 0.45 },
-            ], color: [175, 210, 210], x: 0.1, y: 0.75, vx: 0.4, vy: 0.2, phase: 3.6 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.75 },
-                { ox: 0.12, oy: -0.15, r: 0.65 },
-                { ox: 0.06, oy: -0.07, r: 0.35 },
-            ], color: [220, 210, 195], x: 0.85, y: 0.55, vx: -0.28, vy: -0.32, phase: 4.8 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.95 },
-                { ox: -0.2, oy: -0.12, r: 0.75 },
-                { ox: -0.1, oy: -0.06, r: 0.4 },
-            ], color: [170, 190, 225], x: 0.6, y: 0.1, vx: -0.2, vy: 0.38, phase: 6.0 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.85 },
-                { ox: 0.17, oy: 0.15, r: 0.75 },
-                { ox: 0.08, oy: 0.07, r: 0.35 },
-            ], color: [200, 190, 220], x: 0.35, y: 0.4, vx: 0.32, vy: -0.22, phase: 7.2 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.75 },
-                { ox: -0.13, oy: 0.18, r: 0.65 },
-                { ox: -0.06, oy: 0.1, r: 0.4 },
-            ], color: [215, 205, 200], x: 0.9, y: 0.85, vx: -0.35, vy: -0.25, phase: 8.4 },
-
-            { parts: [
-                { ox: 0, oy: 0, r: 0.7 },
-                { ox: 0.16, oy: -0.1, r: 0.6 },
-                { ox: 0.08, oy: -0.05, r: 0.35 },
-            ], color: [185, 210, 205], x: 0.45, y: 0.9, vx: 0.22, vy: -0.4, phase: 9.6 },
-        ];
-
-        const baseRadius = 0.32;
-
-        const draw = () => {
-            this._time += 0.012;
-            const w = canvas.width;
-            const h = canvas.height;
-            const dim = Math.min(w, h);
-
-            ctx.fillStyle = '#f0f0f0';
-            ctx.fillRect(0, 0, w, h);
-
-            for (const blob of blobs) {
-                const t = this._time;
-                const cx = (blob.x + Math.sin(t * blob.vx + blob.phase) * 0.22) * w;
-                const cy = (blob.y + Math.cos(t * blob.vy + blob.phase * 0.7) * 0.22) * h;
-
-                for (const part of blob.parts) {
-                    const wobble = Math.sin(t * 2.5 + part.ox * 25 + blob.phase) * 0.02;
-                    const px = cx + (part.ox + wobble) * dim;
-                    const py = cy + (part.oy + wobble * 0.7) * dim;
-                    const pr = part.r * baseRadius * dim;
-
-                    const grad = ctx.createRadialGradient(px, py, 0, px, py, pr);
-                    grad.addColorStop(0, `rgba(${blob.color[0]}, ${blob.color[1]}, ${blob.color[2]}, 0.55)`);
-                    grad.addColorStop(0.4, `rgba(${blob.color[0]}, ${blob.color[1]}, ${blob.color[2]}, 0.3)`);
-                    grad.addColorStop(0.7, `rgba(${blob.color[0]}, ${blob.color[1]}, ${blob.color[2]}, 0.1)`);
-                    grad.addColorStop(1, `rgba(${blob.color[0]}, ${blob.color[1]}, ${blob.color[2]}, 0)`);
-
-                    ctx.fillStyle = grad;
-                    ctx.fillRect(0, 0, w, h);
-                }
-            }
-
-            this._animId = requestAnimationFrame(draw);
-        };
-
-        draw();
     }
 
     handleContextInput(e) {
@@ -496,24 +438,66 @@ export class OnboardingView extends LitElement {
         this.onComplete();
     }
 
+    // Advance from the current step. In gateMode we finish as soon as the
+    // required permission is granted (no need to repeat shortcuts/context).
+    next() {
+        if (this.gateMode) { this.completeOnboarding(); return; }
+        if (this.currentSlide >= 3) { this.completeOnboarding(); return; }
+        this.currentSlide = this.currentSlide + 1;
+    }
+
+    back() {
+        if (this.currentSlide > 0) this.currentSlide = this.currentSlide - 1;
+    }
+
     _statusPill(status) {
         const granted = status === 'granted';
         return html`<span class="status-pill ${granted ? 'granted' : 'needed'}">${granted ? 'Granted' : 'Needs access'}</span>`;
     }
 
     _keys(combo) {
-        // combo is an array of key labels rendered as badges, aligned right.
         return html`<div class="keys">${combo.map(k => html`<span class="key">${k}</span>`)}</div>`;
+    }
+
+    // ── Left pane copy per step ──
+    _leftCopy() {
+        switch (this.currentSlide) {
+            case 1: return {
+                title: this.gateMode ? 'Permission needed' : 'Enable permissions',
+                sub: this.isMac
+                    ? 'MetaQuest needs macOS permission to see your screen and hear meeting audio. Grant it on the right to continue.'
+                    : 'Allow microphone access so MetaQuest can hear your questions.',
+            };
+            case 2: return { title: 'Two shortcuts to know', sub: 'These work globally — even when MetaQuest is hidden or another window is focused.' };
+            case 3: return { title: 'Add context', sub: 'Optional. Paste your resume, a job description, or notes so answers are tailored to you.' };
+            default: return { title: 'Welcome to MetaQuest', sub: 'Your real-time AI assistant — it sees your screen, listens to meetings, and answers in context.' };
+        }
+    }
+
+    _primaryLabel() {
+        if (this.gateMode) return 'Continue';
+        if (this.currentSlide === 3) return 'Get Started';
+        return 'Continue';
+    }
+
+    // ── Right pane content per step ──
+    renderRight() {
+        switch (this.currentSlide) {
+            case 1: return this.renderPermissions();
+            case 2: return this.renderShortcuts();
+            case 3: return this.renderContext();
+            default: return this.renderWelcome();
+        }
     }
 
     renderWelcome() {
         return html`
-            <div class="slide">
-                <div class="slide-title">Meta Booster Pro</div>
-                <div class="slide-text">Real-time AI that listens, watches, and helps during interviews, meetings, and exams.</div>
-                <div class="actions">
-                    <button class="btn-primary" @click=${() => { this.currentSlide = 1; }}>Continue</button>
-                </div>
+            <div class="right-eyebrow">What you get</div>
+            <div class="right-heading">Always ready to help</div>
+            <div class="card-list">
+                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Sees your screen.</b> Ask anything about what's in front of you and get an instant answer.</div></div>
+                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Listens to meetings.</b> Live transcription and context-aware replies during interviews and calls.</div></div>
+                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Stays invisible.</b> A quiet overlay you toggle with a keystroke — no breaking flow.</div></div>
             </div>
         `;
     }
@@ -523,21 +507,21 @@ export class OnboardingView extends LitElement {
         const screen = this.permStatus.screen;
 
         const macCards = html`
-            <div class="card">
+            <div class="card ${screen === 'granted' ? 'ok' : ''}">
                 <div class="card-icon">🎬</div>
                 <div class="card-body">
                     <div class="card-title">Screen Recording ${this._statusPill(screen)}</div>
-                    <div class="card-desc">Lets the app see your screen and capture meeting audio. Required for answers.</div>
+                    <div class="card-desc">Required. Lets MetaQuest see your screen and capture meeting audio.</div>
                 </div>
                 <div class="card-actions">
                     <button class="btn-ghost" @click=${() => this.openSettings('screen')}>Open Settings</button>
                 </div>
             </div>
-            <div class="card">
+            <div class="card ${mic === 'granted' ? 'ok' : ''}">
                 <div class="card-icon">🎙️</div>
                 <div class="card-body">
                     <div class="card-title">Microphone ${this._statusPill(mic)}</div>
-                    <div class="card-desc">Lets the app hear you (for “mic” and “both” audio modes).</div>
+                    <div class="card-desc">Recommended. Lets MetaQuest hear you in “mic” and “both” audio modes.</div>
                 </div>
                 <div class="card-actions">
                     <button class="btn-ghost" @click=${() => this.requestMic()}>Allow</button>
@@ -547,17 +531,17 @@ export class OnboardingView extends LitElement {
         `;
 
         const winCards = html`
-            <div class="card">
+            <div class="card ${mic === 'granted' ? 'ok' : ''}">
                 <div class="card-icon">🎙️</div>
                 <div class="card-body">
-                    <div class="card-title">Microphone ${this._statusPill(mic)}</div>
-                    <div class="card-desc">Turn on microphone access so the app can hear your questions.</div>
+                    <div class="card-title">Microphone</div>
+                    <div class="card-desc">Allow microphone access so MetaQuest can hear your questions.</div>
                 </div>
                 <div class="card-actions">
                     <button class="btn-ghost" @click=${() => this.openSettings('microphone')}>Open Settings</button>
                 </div>
             </div>
-            <div class="card">
+            <div class="card ok">
                 <div class="card-icon">🖥️</div>
                 <div class="card-body">
                     <div class="card-title">Screen &amp; audio capture ${this._statusPill('granted')}</div>
@@ -567,55 +551,31 @@ export class OnboardingView extends LitElement {
         `;
 
         return html`
-            <div class="slide slide-wide">
-                <div class="slide-title">Enable permissions</div>
-                <div class="slide-text">
-                    ${this.isMac
-                        ? 'macOS needs your OK for the app to see the screen and hear audio. Grant both below, then come back.'
-                        : 'Allow microphone access so the app can hear you. Screen capture works automatically.'}
-                </div>
-                <div class="card-list">
-                    ${this.isMac ? macCards : winCards}
-                </div>
-                <div class="hint">
-                    ${this.isMac
-                        ? 'After toggling a permission in Settings you may need to restart the app.'
-                        : 'You can change this anytime in Windows Settings ▸ Privacy.'}
-                </div>
-                <div class="actions">
-                    <button class="btn-primary" @click=${() => { this.refreshPermissions(); this.currentSlide = 2; }}>Continue</button>
-                    <button class="btn-back" @click=${() => { this.currentSlide = 0; }}>Back</button>
-                </div>
-            </div>
+            <div class="right-eyebrow">Step ${this.gateMode ? '' : '2 of 4'}</div>
+            <div class="right-heading">Grant access to continue</div>
+            <div class="card-list">${this.isMac ? macCards : winCards}</div>
         `;
     }
 
     renderShortcuts() {
         const mod = this.isMac ? '⌘' : 'Ctrl';
         return html`
-            <div class="slide slide-wide">
-                <div class="slide-title">Two shortcuts to know</div>
-                <div class="slide-text">These work globally — even when the app is hidden or another window is focused.</div>
-                <div class="card-list">
-                    <div class="shortcut-row">
-                        <div>
-                            <div class="shortcut-label">Show / hide the app</div>
-                            <div class="shortcut-sub">Instantly toggle the overlay out of sight.</div>
-                        </div>
-                        ${this._keys([mod, '\\'])}
+            <div class="right-eyebrow">Step 3 of 4</div>
+            <div class="right-heading">Work hands-free</div>
+            <div class="card-list">
+                <div class="shortcut-row">
+                    <div>
+                        <div class="shortcut-label">Show / hide the app</div>
+                        <div class="shortcut-sub">Instantly toggle the overlay out of sight.</div>
                     </div>
-                    <div class="shortcut-row">
-                        <div>
-                            <div class="shortcut-label">Answer now</div>
-                            <div class="shortcut-sub">Analyze what's on screen and reply immediately.</div>
-                        </div>
-                        ${this._keys([mod, '↵'])}
-                    </div>
+                    ${this._keys([mod, '\\'])}
                 </div>
-                <div class="hint">See all shortcuts anytime in Help.</div>
-                <div class="actions">
-                    <button class="btn-primary" @click=${() => { this.currentSlide = 3; }}>Continue</button>
-                    <button class="btn-back" @click=${() => { this.currentSlide = 1; }}>Back</button>
+                <div class="shortcut-row">
+                    <div>
+                        <div class="shortcut-label">Answer now</div>
+                        <div class="shortcut-sub">Analyze what's on screen and reply immediately.</div>
+                    </div>
+                    ${this._keys([mod, '↵'])}
                 </div>
             </div>
         `;
@@ -623,38 +583,58 @@ export class OnboardingView extends LitElement {
 
     renderContext() {
         return html`
-            <div class="slide">
-                <div class="slide-title">Add context</div>
-                <div class="slide-text">Paste your resume or any info the AI should know. You can skip this and add it later.</div>
-                <textarea
-                    class="context-input"
-                    placeholder="Resume, job description, notes..."
-                    .value=${this.contextText}
-                    @input=${this.handleContextInput}
-                ></textarea>
-                <div class="actions">
-                    <button class="btn-primary" @click=${this.completeOnboarding}>Get Started</button>
-                    <button class="btn-back" @click=${() => { this.currentSlide = 2; }}>Back</button>
-                </div>
-            </div>
+            <div class="right-eyebrow">Step 4 of 4</div>
+            <div class="right-heading">Make it yours</div>
+            <textarea
+                class="context-input"
+                placeholder="Resume, job description, notes..."
+                .value=${this.contextText}
+                @input=${this.handleContextInput}
+            ></textarea>
         `;
     }
 
-    renderSlide() {
-        switch (this.currentSlide) {
-            case 0: return this.renderWelcome();
-            case 1: return this.renderPermissions();
-            case 2: return this.renderShortcuts();
-            default: return this.renderContext();
-        }
-    }
-
     render() {
+        const copy = this._leftCopy();
+        const gateBlocked = this.currentSlide === 1 && !this.requiredGranted;
+        const showBack = !this.gateMode && this.currentSlide > 0;
+        const totalSteps = 4;
+
         return html`
             <div class="onboarding">
-                <canvas class="aurora"></canvas>
-                <canvas class="dither"></canvas>
-                ${this.renderSlide()}
+                <div class="pane-left">
+                    <div class="brand">
+                        <img class="brand-logo" src="assets/mascot/max.svg" alt="MetaQuest" />
+                        <span class="brand-name">MetaQuest</span>
+                    </div>
+
+                    <div class="left-body">
+                        ${this.gateMode ? '' : html`
+                            <div class="steps-dots">
+                                ${Array.from({ length: totalSteps }, (_, i) => html`
+                                    <div class="dot ${i === this.currentSlide ? 'active' : ''} ${i < this.currentSlide ? 'done' : ''}"></div>
+                                `)}
+                            </div>
+                        `}
+                        <h1 class="left-title">${copy.title}</h1>
+                        <p class="left-sub">${copy.sub}</p>
+
+                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording is required. Open Settings, enable MetaQuest, then return here — this unlocks automatically.</div>` : ''}
+
+                        <div class="left-actions">
+                            <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
+                                ${this._primaryLabel()} ${gateBlocked ? '' : '→'}
+                            </button>
+                            ${showBack ? html`<button class="btn-back" @click=${() => this.back()}>Back</button>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="terms">By continuing you agree to our Terms of Service and Privacy Policy.</div>
+                </div>
+
+                <div class="pane-right">
+                    ${this.renderRight()}
+                </div>
             </div>
         `;
     }

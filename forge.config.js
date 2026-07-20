@@ -7,7 +7,7 @@ module.exports = {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
         extraResource: ['./src/assets/SystemAudioDump'],
-        name: 'Meta Booster Pro',
+        name: 'MetaQuest',
     icon: 'src/assets/logo',
     // Build for both Apple Silicon (arm64) and Intel (x64) Macs
     arch: ['x64', 'arm64'],
@@ -40,9 +40,9 @@ module.exports = {
         {
             name: '@electron-forge/maker-squirrel',
             config: {
-                name: 'meta-max-pro',
-                productName: 'Meta Booster Pro',
-                shortcutName: 'Meta Booster Pro',
+                name: 'metaquest',
+                productName: 'MetaQuest',
+                shortcutName: 'MetaQuest',
                 createDesktopShortcut: true,
                 createStartMenuShortcut: true,
             },
@@ -62,8 +62,8 @@ module.exports = {
             platforms: ['linux'],
             config: {
                 options: {
-                    name: 'Meta Booster Pro',
-                    productName: 'Meta Booster Pro',
+                    name: 'MetaQuest',
+                    productName: 'MetaQuest',
                     genericName: 'AI Assistant',
                     description: 'AI assistant for interviews and learning',
                     categories: ['Development', 'Education'],

@@ -1,8 +1,8 @@
 {
-    "name": "meta-booster-pro",
-    "productName": "Meta Booster Pro",
+    "name": "metaquest",
+    "productName": "MetaQuest",
     "version": "0.10.1",
-    "description": "Meta Booster Pro",
+    "description": "MetaQuest",
     "main": "src/index.js",
     "scripts": {
         "start": "electron-forge start",
@@ -13,10 +13,10 @@
         "lint": "echo \"No linting configured\""
     },
     "keywords": [
-        "meta booster pro",
-        "meta booster pro ai",
-        "meta booster pro ai assistant",
-        "meta booster pro ai assistant for interviews"
+        "metaquest",
+        "metaquest ai",
+        "metaquest ai assistant",
+        "metaquest ai assistant for interviews"
     ],
     "author": "TejG",
     "license": "GPL-3.0",
