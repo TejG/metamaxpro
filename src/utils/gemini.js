@@ -46,15 +46,17 @@ module.exports.formatSpeakerResults = formatSpeakerResults;
 // Audio capture variables
 let systemAudioProc = null;
 
-// Silence detection: wait for a 1.2s pause after speech before triggering the LLM.
+// Silence detection: wait for a short pause after speech before triggering the LLM.
 // Resets on every new transcription chunk.
 let transcriptionSilenceTimer = null;
 // How long to wait after the last speech chunk before answering. Lower = faster
-// perceived response; too low triggers on natural mid-sentence pauses. 700ms is
-// the sweet spot (ADR-003).
-const SILENCE_THRESHOLD_MS = 700;
+// perceived response; too low triggers on natural mid-sentence pauses. Tuned down
+// from 700ms → 400ms for a snappier (<1-2s) reply; override via GEMINI_SILENCE_MS.
+const SILENCE_THRESHOLD_MS = Number(process.env.GEMINI_SILENCE_MS) || 400;
 let sessionReadyAt = 0;
-const SESSION_WARMUP_MS = 2000;
+// Ignore transcription for a brief moment after connect so the session's initial
+// buffered audio doesn't fire a spurious answer. Override via GEMINI_WARMUP_MS.
+const SESSION_WARMUP_MS = Number(process.env.GEMINI_WARMUP_MS) || 1000;
 
 // AbortController for in-flight Groq/Anthropic LLM requests
 let currentGroqAbortController = null;
