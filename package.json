@@ -9,6 +9,7 @@
         "package": "electron-forge package",
         "make": "electron-forge make",
         "publish": "electron-forge publish",
+        "generate-icons": "node scripts/generate-icons.js",
         "lint": "echo \"No linting configured\""
     },
     "keywords": [
@@ -38,6 +39,7 @@
         "@electron-forge/plugin-fuses": "^7.8.1",
         "@electron/fuses": "^1.8.0",
         "@reforged/maker-appimage": "^5.0.0",
-        "electron": "^30.0.5"
+        "electron": "^30.0.5",
+        "png-to-ico": "^3.0.2"
     }
 }
