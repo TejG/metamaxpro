@@ -1,12 +1,14 @@
 name: Release
 
+# Releases are cut from tags only. Push a `v*` tag (e.g. `git push origin v0.10.0`)
+# and this builds every platform and publishes the GitHub Release. Pushing to
+# `main` no longer triggers a build — that previously spawned a second run that
+# raced the tag run and failed with `already_exists`.
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -14,41 +16,13 @@ permissions:
 env:
   NODE_VERSION: '22'
 
+# `softprops/action-gh-release@v2` creates the release if it's missing and
+# updates it (uploading/overwriting assets) if it already exists, so no separate
+# create-release step is needed — and it's safe for the platform jobs to run
+# concurrently against the same tag.
 jobs:
-  prepare-release:
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.determine.outputs.tag }}
-    if: "startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Determine tag name
-        id: determine
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG_NAME="${GITHUB_REF#refs/tags/}"
-          else
-            TAG_NAME="v$(node -p 'require("./package.json").version')"
-          fi
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
-
-      - name: Create release (if missing)
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.determine.outputs.tag }}
-          release_name: ${{ steps.determine.outputs.tag }}
-          body: "Automated release for ${{ steps.determine.outputs.tag }}"
   build-mac-arm64:
     runs-on: macos-latest
-    needs: prepare-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -64,10 +38,8 @@ jobs:
 
       - name: Upload macOS arm64 artifacts to release
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
           # .dmg = manual first install; .zip = Squirrel.Mac auto-update feed
           files: |
             out/make/**/*.dmg
@@ -75,7 +47,6 @@ jobs:
 
   build-mac-x64:
     runs-on: macos-13
-    needs: prepare-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -91,10 +62,8 @@ jobs:
 
       - name: Upload macOS x64 artifacts to release
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
           # .dmg = manual first install; .zip = Squirrel.Mac auto-update feed
           files: |
             out/make/**/*.dmg
@@ -102,7 +71,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    needs: prepare-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -118,10 +86,8 @@ jobs:
 
       - name: Upload Windows x64 artifacts to release
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
           # Squirrel.Windows auto-update needs the full feed, not just the .exe:
           # RELEASES (the manifest) + the *-full.nupkg must be on the release too.
           files: |
