@@ -11,6 +11,12 @@ module.exports = {
     icon: 'src/assets/logo',
     // Build for both Apple Silicon (arm64) and Intel (x64) Macs
     arch: ['x64', 'arm64'],
+        // macOS requires these usage-description strings in Info.plist or it
+        // will deny (and can crash) the app when it requests mic/camera access.
+        extendInfo: {
+            NSMicrophoneUsageDescription: 'Meta Booster Pro uses the microphone to hear your questions and provide live answers during interviews.',
+            NSCameraUsageDescription: 'Meta Booster Pro may use the camera for video-based assistance.',
+        },
         // use `security find-identity -v -p codesigning` to find your identity
         // for macos signing
         // also fuck apple

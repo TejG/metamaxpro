@@ -1798,8 +1798,10 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
     console.log('Starting macOS audio capture with SystemAudioDump...');
 
-    const { app } = require('electron');
+    const { app, systemPreferences } = require('electron');
     const path = require('path');
+    const fs = require('fs');
+    const { execFileSync } = require('child_process');
 
     let systemAudioPath;
     if (app.isPackaged) {
@@ -1810,6 +1812,35 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
     console.log('SystemAudioDump path:', systemAudioPath);
 
+    // The helper is bundled inside an (unsigned) app, so a freshly-downloaded
+    // copy is quarantined by macOS and Gatekeeper can silently kill it the
+    // moment we spawn it — which looks exactly like "audio produces no response".
+    // Best-effort: make sure it's executable and clear the quarantine flag so
+    // capture works without the user opening Terminal. (Both may fail if the app
+    // lives in a write-protected location — harmless, it's wrapped in try/catch.)
+    if (!fs.existsSync(systemAudioPath)) {
+        console.error('SystemAudioDump binary not found at', systemAudioPath);
+        sendToRenderer('update-status', '⚠️ Audio capture unavailable: helper binary is missing. Please reinstall the app.');
+        return false;
+    }
+    try {
+        fs.chmodSync(systemAudioPath, 0o755);
+        try { execFileSync('xattr', ['-d', 'com.apple.quarantine', systemAudioPath]); } catch (_) { /* no quarantine attribute — nothing to clear */ }
+    } catch (e) {
+        console.error('Could not prepare SystemAudioDump binary (continuing):', e.message);
+    }
+
+    // System-audio capture goes through ScreenCaptureKit, which is gated by the
+    // Screen Recording permission. Without it the helper runs but records
+    // silence — surface that rather than leaving the user staring at nothing.
+    try {
+        const screenStatus = systemPreferences.getMediaAccessStatus('screen');
+        console.log('[Permissions] screen recording status:', screenStatus);
+        if (screenStatus !== 'granted') {
+            sendToRenderer('update-status', '⚠️ Grant Screen Recording permission (System Settings ▸ Privacy & Security), then restart to capture audio.');
+        }
+    } catch (_) { /* getMediaAccessStatus unsupported on this OS version — ignore */ }
+
     const spawnOptions = {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
@@ -1817,14 +1848,24 @@ async function startMacOSAudioCapture(geminiSessionRef) {
         },
     };
 
-    systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
+    try {
+        systemAudioProc = spawn(systemAudioPath, [], spawnOptions);
+    } catch (e) {
+        console.error('Failed to spawn SystemAudioDump:', e);
+        sendToRenderer('update-status', '⚠️ Audio capture failed to start: ' + e.message);
+        return false;
+    }
 
-    if (!systemAudioProc.pid) {
+    if (!systemAudioProc || !systemAudioProc.pid) {
         console.error('Failed to start SystemAudioDump');
+        sendToRenderer('update-status', '⚠️ Audio capture failed to start (the helper could not launch).');
         return false;
     }
 
     console.log('SystemAudioDump started with PID:', systemAudioProc.pid);
+    // If the helper dies within ~1.5s it was almost certainly blocked by
+    // Gatekeeper or a missing permission — used by the close handler below.
+    const systemAudioSpawnedAt = Date.now();
 
     const CHUNK_DURATION = 0.1;
     const SAMPLE_RATE = 24000;
@@ -1898,11 +1939,17 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
     systemAudioProc.on('close', code => {
         console.log('SystemAudioDump process closed with code:', code);
+        // Died almost immediately (and not because the user stopped it) → the OS
+        // blocked it. Tell the user the two things that actually fix it.
+        if (!isUserClosing && Date.now() - systemAudioSpawnedAt < 1500) {
+            sendToRenderer('update-status', `⚠️ Audio helper stopped immediately (code ${code}). Grant Screen Recording permission, and if the app was downloaded, right-click it and choose Open once to allow it.`);
+        }
         systemAudioProc = null;
     });
 
     systemAudioProc.on('error', err => {
         console.error('SystemAudioDump process error:', err);
+        sendToRenderer('update-status', '⚠️ Audio capture error: ' + err.message);
         systemAudioProc = null;
     });
 

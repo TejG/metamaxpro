@@ -42,10 +42,28 @@ app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
 
-    // Trigger screen recording permission prompt on macOS
+    // Request the macOS permissions the app needs up front so audio capture
+    // works on first run instead of failing silently. Screenshots only need
+    // Screen Recording; audio additionally needs Microphone (for mic/both
+    // modes) — and macOS never shows the mic prompt unless we explicitly ask.
     if (process.platform === 'darwin') {
-        const { desktopCapturer } = require('electron');
+        const { desktopCapturer, systemPreferences } = require('electron');
+        // Screen Recording — used for screenshots AND system-audio capture.
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
+        // Microphone — request explicitly (no-op if already granted).
+        try {
+            const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+            console.log('[Permissions] microphone status:', micStatus);
+            if (micStatus !== 'granted') {
+                const granted = await systemPreferences.askForMediaAccess('microphone');
+                console.log('[Permissions] microphone access granted:', granted);
+            }
+        } catch (e) {
+            console.error('[Permissions] microphone request failed:', e && e.message ? e.message : e);
+        }
+        try {
+            console.log('[Permissions] screen recording status:', systemPreferences.getMediaAccessStatus('screen'));
+        } catch (_) { /* older macOS — ignore */ }
     }
 
     createMainWindow();
