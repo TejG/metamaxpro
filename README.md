@@ -1,4 +1,4 @@
-# Meta Booster Pro
+# MetaQuest
 
 > [!NOTE]
 > Use latest MacOS and Windows version, older versions have limited support
@@ -10,7 +10,7 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ## Features
 
-- **Live AI Assistance**: Real-time help powered by Google Gemini 2.0 Flash Live
+- **Live AI Assistance**: Real-time help powered by Google Gemini (latest Flash), with Groq and Anthropic fallbacks
 - **Screen & Audio Capture**: Analyzes what you see and hear for contextual responses
 - **Multiple Profiles**: Interview, Sales Call, Business Meeting, Presentation, Negotiation
 - **Transparent Overlay**: Always-on-top window that can be positioned anywhere
@@ -19,35 +19,40 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ## Download
 
-### macOS Installation Troubleshooting
+Get the latest installers from the **[Releases page](https://github.com/TejG/metamaxpro/releases/latest)**:
 
-If you see a message like "Meta Booster Pro is damaged and can’t be opened. You should move it to the Trash":
-
-1. **Remove Quarantine Attribute:**
-	Open Terminal and run:
-	```sh
-	xattr -dr com.apple.quarantine /Applications/Meta\ Booster\ Pro.app
-	```
-	(Adjust the path if you installed elsewhere.)
-
-2. **Allow App in Security Settings:**
-	- Go to **System Settings > Privacy & Security**
-	- If you see a warning about Meta Booster Pro, click **Allow Anyway**
-
-3. **For Developers:**
-	If you built the app yourself, you may need to codesign it for local use:
-	```sh
-	codesign --deep --force --sign - /path/to/Meta\ Booster\ Pro.app
-	```
-
-For production/distribution, the app must be signed and notarized with an Apple Developer ID for best user experience.
-
-| Platform | Link |
+| Platform | File |
 |---|---|
-| macOS (Apple Silicon, arm64) | [Meta Booster Pro-0.8.5-arm64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5-arm64.dmg) |
-| macOS (Intel, x64) | [Meta Booster Pro-0.8.5-x64.dmg](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5-x64.dmg) |
-| Windows (x64) | [Meta Booster Pro-0.8.5.exe](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5.exe) |
-| Linux (AppImage) | [Meta Booster Pro-0.8.5.AppImage](https://github.com/TejG/metamaxpro/releases/latest/download/Meta.Booster.Pro-0.8.5.AppImage) |
+| macOS (Apple Silicon, arm64) | `MetaQuest-<version>-arm64.dmg` |
+| macOS (Intel, x64) | `MetaQuest-<version>-x64.dmg` |
+| Windows (x64) | `MetaQuest-<version>.Setup.exe` |
+| Linux (AppImage) | `MetaQuest-<version>.AppImage` |
+
+### macOS Installation & Permissions (Important)
+
+MetaQuest isn't code-signed yet, so macOS quarantines it. Until it's signed, do
+this **once** or the app can't be granted Screen Recording / Microphone access
+(they simply won't appear in System Settings, because macOS runs a quarantined
+app from a throwaway path — "App Translocation"):
+
+1. **Move MetaQuest to `/Applications`** (drag it out of Downloads). This is required — it stops macOS translocating the app.
+
+2. **Remove the quarantine attribute.** Open Terminal and run:
+	```sh
+	xattr -dr com.apple.quarantine /Applications/MetaQuest.app
+	```
+	(The onboarding screen has a **Copy** button for this exact command.)
+
+3. **Launch MetaQuest from `/Applications`.** In onboarding, grant **Screen Recording** (required) and **Microphone** (recommended). If a prompt doesn't appear, use **Open Settings** on the card and toggle MetaQuest on — the onboarding detects it automatically.
+
+4. If you still see "MetaQuest is damaged and can't be opened", repeat step 2 — the quarantine flag wasn't cleared.
+
+**For developers building locally**, you can ad-hoc sign for local use:
+```sh
+codesign --deep --force --sign - /Applications/MetaQuest.app
+```
+
+For distribution, the app should be signed and notarized with an Apple Developer ID — that removes all of the above steps.
 
 ## Setup (Development)
 

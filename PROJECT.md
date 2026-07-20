@@ -1,4 +1,4 @@
-# Meta Booster Pro — Project ADR & Architecture Reference
+# MetaQuest — Project ADR & Architecture Reference
 
 > Use this file as the primary reference when making changes, adding features, or debugging.
 > Update this file whenever a significant decision is made or the architecture changes.
@@ -7,7 +7,7 @@
 
 ## What This Is
 
-Meta Booster Pro is a real-time AI interview assistant built as an Electron app. It listens to the interviewer's voice in real-time, transcribes what they say, and generates a spoken-style answer that the candidate can read and speak naturally — grounded in their resume and tailored to the target job description.
+MetaQuest is a real-time AI interview assistant built as an Electron app. It listens to the interviewer's voice in real-time, transcribes what they say, and generates a spoken-style answer that the candidate can read and speak naturally — grounded in their resume and tailored to the target job description.
 
 **The core promise:** Within 1-2 seconds of the interviewer finishing their question, a natural-sounding answer starts appearing on screen. The answer should be indistinguishable from something a prepared, experienced human would say.
 
@@ -68,9 +68,11 @@ Microphone/System Audio
 ---
 
 ### ADR-003: Trigger Groq from silence detection, not turnComplete
-**Decision:** `scheduleGroqTrigger()` is called on every `inputTranscription` chunk. It sets a 700ms debounce timer. When 700ms of silence passes after the last chunk (user stopped speaking), Groq is triggered immediately — before Gemini starts generating audio. `turnComplete` is kept only as a fallback.
+**Decision:** `scheduleGroqTrigger()` is called on every `inputTranscription` chunk. It sets a debounce timer. When that much silence passes after the last chunk (user stopped speaking), Groq is triggered immediately — before Gemini starts generating audio. `turnComplete` is kept only as a fallback.
 
-**Why:** `responseModalities: [Modality.TEXT]` was attempted but breaks the session — the `gemini-2.5-flash-native-audio-preview` model with speaker diarization requires AUDIO modality. The real root cause was waiting for `turnComplete`, which fires only after Gemini finishes generating a full audio response (10-15s). By triggering on speech silence instead, Groq starts ~700ms after the user stops talking.
+**Why:** `responseModalities: [Modality.TEXT]` was attempted but breaks the session — the `gemini-2.5-flash-native-audio-preview` model with speaker diarization requires AUDIO modality. The real root cause was waiting for `turnComplete`, which fires only after Gemini finishes generating a full audio response (10-15s). By triggering on speech silence instead, Groq starts shortly after the user stops talking.
+
+**Update 2026-07-20:** debounce lowered 700ms → **400ms** and made env-configurable (`GEMINI_SILENCE_MS`, `GEMINI_WARMUP_MS`) for a snappier <1-2s reply (see ADR-017).
 
 **Status:** ✅ Fixed 2026-04-02. `scheduleGroqTrigger()` in `gemini.js`.
 
@@ -183,12 +185,67 @@ TARGET JOB DESCRIPTION:
 
 ---
 
+### ADR-012: Latest free Gemini models via `-latest` aliases
+**Decision:** Model IDs are centralized and env-overridable in `storage.js` (`GEMINI_PRIMARY_MODEL`=`gemini-flash-latest`, `GEMINI_LITE_MODEL`=`gemini-flash-lite-latest`, thresholds `GEMINI_PRIMARY_RPD`/`GEMINI_LITE_RPD`). Image fallbacks in `gemini.js` are also env-overridable (`GEMINI_IMAGE_FALLBACKS`).
+
+**Why:** The `-latest` aliases always resolve to the current GA Flash generation (Gemini 3.x as of 2026), which unlocks the larger free-tier budget (~1500 req/day for Flash vs 250 for fixed 2.5-flash) and rides future model bumps with no code change. `gemini-2.5-pro` was removed from all fallbacks — it's free-tier `limit: 0`, and only ever surfaced a misleading "quota exceeded" 429. On 429 the image path now skips to the next model and surfaces a friendly rate-limit message.
+
+**Status:** ✅ Implemented 2026-07-20. `storage.js`, `gemini.js`.
+
+---
+
+### ADR-013: In-app auto-update + tags-only release CI
+**Decision:** `update-electron-app` (update.electronjs.org feed, repo `TejG/metamaxpro`) is wired in `index.js`, guarded to packaged builds. Release CI (`.github/workflows/release.yml`) triggers on **tags only** and each platform job publishes idempotently via `softprops/action-gh-release@v2`; the mac `.zip` + Windows `RELEASES`/`.nupkg` auto-update artifacts are uploaded alongside installers.
+
+**Why:** Users shouldn't re-download installers each release. The old workflow triggered on both tag and `main` push, spawning two runs that raced on the archived `actions/create-release@v1` and failed with `already_exists`; dropping the `main` trigger and the separate prepare-release job fixed it.
+
+**Caveat:** macOS auto-update requires code signing (Squirrel.Mac refuses unsigned) — not yet enabled. Windows auto-updates as-is. Feed requires the repo to be public.
+
+**Status:** ✅ Implemented 2026-07-20. `index.js`, `forge.config.js` (maker-zip), `release.yml`.
+
+---
+
+### ADR-014: macOS audio-capture robustness + visible failures
+**Decision:** Before spawning `SystemAudioDump`, ensure it's executable and best-effort clear its `com.apple.quarantine` flag; if the helper is missing, dies immediately, or Screen Recording isn't granted, surface an actionable message to the renderer instead of failing silently.
+
+**Why:** On fresh machines audio produced no response while screenshots worked — the bundled (unsigned) helper was Gatekeeper-blocked and all failures only hit the console.
+
+**Status:** ✅ Implemented 2026-07-20. `gemini.js`, `index.js`.
+
+---
+
+### ADR-015: Rename to MetaQuest + mascot app icon
+**Decision:** Product-facing name is **MetaQuest** (package.json, forge makers, header/onboarding/MainView copy). Internal identifiers (`meta-max-pro-app` element, `metaMaxPro` global) and the config dir (`meta-max-pro-config`) are intentionally unchanged so existing user data/keys survive the rename. App icons (`logo.icns/.ico/.png`) are generated from the fox mascot (`src/assets/mascot/max.svg`) via `scripts/generate-icons.js` (`npm run generate-icons`). Stable `appBundleId: com.metaquest.app` set for consistent TCC attribution.
+
+**Status:** ✅ Implemented 2026-07-20. `package.json`, `forge.config.js`, `scripts/generate-icons.js`, `AppHeader.js`, `MainView.js`.
+
+---
+
+### ADR-016: Gated two-pane onboarding + permission handling (unsigned)
+**Decision:** `OnboardingView` is a two-pane, step-by-step flow (left: brand + step controls; right: instructions) covering Welcome → Permissions → Shortcuts → Context. Permissions are **gated**: Screen Recording is a hard gate on macOS (polled so it unlocks live); Microphone is recommended but **skippable** ("Skip for now"). Launch/focus gating in `MetaMaxProApp` re-shows onboarding if Screen Recording is missing (`gateMode`). IPC: `permissions:get-status` / `-request-microphone` / `-open-settings`.
+
+**Unsigned caveat:** macOS TCC is unreliable for unsigned/quarantined apps (App Translocation prevents mic/screen registration). Onboarding shows the exact `xattr -dr com.apple.quarantine /Applications/MetaQuest.app` workaround (with a Copy button); during onboarding the window drops always-on-top/content-protection and becomes movable so System Settings and native prompts are reachable. Durable fix is code signing + notarization (deferred).
+
+**Status:** ✅ Implemented 2026-07-20. `OnboardingView.js`, `MetaMaxProApp.js`, `window.js`, `index.js`.
+
+---
+
+### ADR-017: Latency tuning to <1-2s
+**Decision:** Silence debounce 700ms → 400ms and session warmup 2000ms → 1000ms, both env-overridable; Groq cascade keeps the lowest-TTFT model (`llama-3.3-70b-versatile`) first.
+
+**Why:** The controllable latency was the post-speech silence wait. Remaining lag is Gemini Live transcription (Google-side, not client-tunable).
+
+**Status:** ✅ Implemented 2026-07-20. `gemini.js`.
+
+---
+
 ## Known Issues / Active Bugs
 
 | # | Issue | Root Cause | Fix |
 |---|-------|-----------|-----|
-| ~~1~~ | ~~**15-20 second latency**~~ | ~~Gemini `responseModalities` set to `AUDIO`~~ | ✅ Fixed — `[Modality.TEXT]` |
+| ~~1~~ | ~~**15-20 second latency**~~ | ~~Gemini `responseModalities` set to `AUDIO`~~ | ✅ Fixed — silence-trigger + 400ms debounce (ADR-003/017) |
 | 2 | Responses start with "I" | Prompt says first word shouldn't be "I" but model sometimes ignores it | May need stronger enforcement or few-shot examples |
+| 3 | **macOS permissions unreliable (unsigned)** | App is unsigned/notarized → Gatekeeper quarantine + App Translocation block mic/screen TCC registration | Workaround: move to /Applications + `xattr` de-quarantine (surfaced in onboarding, ADR-016). Durable fix: code signing + notarization |
 
 ---
 
@@ -204,7 +261,8 @@ TARGET JOB DESCRIPTION:
 
 ## Roadmap / Next Steps
 
-- [ ] **Fix AUDIO → TEXT modality** (ADR-003) — highest priority, eliminates the 15-20s latency
+- [ ] **Code signing + notarization (macOS)** — highest priority; unblocks mic/screen permissions, the audio helper, clean quit, and mac auto-update (see ADR-016)
+- [ ] Ship an x64 `SystemAudioDump` (current binary is arm64-only → Intel Macs get no audio)
 - [ ] Local transcription via whisper.cpp (offline, no Gemini dependency)
 - [ ] Dual audio capture — separate microphone vs system audio streams
 - [ ] Speaker diarization — label Interviewer vs Candidate in transcript
@@ -215,6 +273,7 @@ TARGET JOB DESCRIPTION:
 
 ## Repo / Release
 
-- GitHub: `https://github.com/mar7799/demo_poc`
-- Release: v0.7.0 DMG for macOS Apple Silicon
-- Branch: `main` (single squashed commit history — force push to keep clean)
+- GitHub: `https://github.com/TejG/metamaxpro`
+- Latest release: v0.10.3 (v0.10.4 pending) — installers + auto-update artifacts per platform
+- Auto-update: `update.electronjs.org` feed (Windows live; macOS pending code signing)
+- Branch: `main`

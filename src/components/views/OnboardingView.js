@@ -365,6 +365,40 @@ export class OnboardingView extends LitElement {
 
         .context-input::placeholder { color: #6c6c74; }
         .context-input:focus { outline: none; border-color: rgba(79, 140, 245, 0.6); }
+
+        .help-note {
+            margin-top: 6px;
+            padding: 12px 14px;
+            border: 1px dashed rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .help-title { font-size: 12px; font-weight: 600; color: #d8d8de; }
+        .help-desc { font-size: 11px; line-height: 1.45; color: #9a9aa2; margin-top: 3px; }
+
+        .cmd-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .cmd {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            color: #cfe0ff;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 7px;
+            padding: 7px 10px;
+            overflow-x: auto;
+            white-space: nowrap;
+            -webkit-app-region: no-drag;
+            user-select: text;
+        }
     `;
 
     static properties = {
@@ -408,13 +442,18 @@ export class OnboardingView extends LitElement {
         try { return require('electron').ipcRenderer; } catch (_) { return null; }
     }
 
-    // On macOS both Screen Recording (screenshots + system-audio capture) and
-    // Microphone are required — the user can't leave the permissions step until
-    // both are granted. "Open Settings" is always available as an escape hatch
-    // (they can toggle either there even if the native prompt was dismissed).
+    // Screen Recording is the hard gate on macOS — the app genuinely can't work
+    // without it (screenshots + system-audio capture). Microphone is strongly
+    // recommended but skippable: on an unsigned build macOS TCC can make it
+    // impossible to grant, and we don't want users permanently stranded (speaker
+    // -only mode still works). They can enable it later in Settings.
     get requiredGranted() {
         if (!this.isMac) return true;
-        return this.permStatus.screen === 'granted' && this.permStatus.microphone === 'granted';
+        return this.permStatus.screen === 'granted';
+    }
+
+    get micPending() {
+        return this.isMac && this.permStatus.microphone !== 'granted';
     }
 
     async refreshPermissions() {
@@ -438,6 +477,18 @@ export class OnboardingView extends LitElement {
         const ipc = this._ipc;
         if (ipc) await ipc.invoke('permissions:request-microphone');
         this.refreshPermissions();
+    }
+
+    // The reliable way to get an unsigned build past macOS Gatekeeper/TCC:
+    // move it to /Applications and strip the download quarantine flag. Copy the
+    // exact command so the user can paste it into Terminal.
+    _quarantineCmd = 'xattr -dr com.apple.quarantine /Applications/MetaQuest.app';
+
+    _copyQuarantineCmd() {
+        try { require('electron').clipboard.writeText(this._quarantineCmd); } catch (_) {}
+        this._copied = true;
+        this.requestUpdate();
+        setTimeout(() => { this._copied = false; this.requestUpdate(); }, 1500);
     }
 
     handleContextInput(e) {
@@ -535,7 +586,7 @@ export class OnboardingView extends LitElement {
                 <div class="card-icon">🎙️</div>
                 <div class="card-body">
                     <div class="card-title">Microphone ${this._statusPill(mic)}</div>
-                    <div class="card-desc">Required. Lets MetaQuest hear you in “mic” and “both” audio modes.</div>
+                    <div class="card-desc">Recommended. Lets MetaQuest hear you in “mic” and “both” audio modes. You can add this later.</div>
                 </div>
                 <div class="card-actions">
                     <button class="btn-ghost" @click=${() => this.requestMic()}>Allow</button>
@@ -568,6 +619,16 @@ export class OnboardingView extends LitElement {
             <div class="right-eyebrow">Step ${this.gateMode ? '' : '2 of 4'}</div>
             <div class="right-heading">Grant access to continue</div>
             <div class="card-list">${this.isMac ? macCards : winCards}</div>
+            ${this.isMac ? html`
+                <div class="help-note">
+                    <div class="help-title">Not seeing MetaQuest in the list, or nothing happens?</div>
+                    <div class="help-desc">Move MetaQuest to your Applications folder, run this in Terminal to clear the download quarantine, then relaunch:</div>
+                    <div class="cmd-row">
+                        <code class="cmd">${this._quarantineCmd}</code>
+                        <button class="btn-ghost" @click=${() => this._copyQuarantineCmd()}>${this._copied ? 'Copied' : 'Copy'}</button>
+                    </div>
+                </div>
+            ` : ''}
         `;
     }
 
@@ -633,11 +694,12 @@ export class OnboardingView extends LitElement {
                         <h1 class="left-title">${copy.title}</h1>
                         <p class="left-sub">${copy.sub}</p>
 
-                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording and Microphone are both required. Enable them for MetaQuest in Settings, then return here — this unlocks automatically.</div>` : ''}
+                        ${gateBlocked ? html`<div class="gate-hint">⚠ Screen Recording is required. Enable it for MetaQuest in Settings, then return here — this unlocks automatically.</div>` : ''}
+                        ${(this.currentSlide === 1 && !gateBlocked && this.micPending) ? html`<div class="gate-hint">Microphone isn't granted yet. It's recommended, but you can continue and add it later in Settings.</div>` : ''}
 
                         <div class="left-actions">
                             <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
-                                ${this._primaryLabel()} ${gateBlocked ? '' : '→'}
+                                ${this.currentSlide === 1 && this.micPending && !gateBlocked ? 'Skip for now' : this._primaryLabel()} ${gateBlocked ? '' : '→'}
                             </button>
                             ${showBack ? html`<button class="btn-back" @click=${() => this.back()}>Back</button>` : ''}
                         </div>

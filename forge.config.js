@@ -9,13 +9,16 @@ module.exports = {
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'MetaQuest',
     icon: 'src/assets/logo',
+    // Stable bundle identifier — TCC (mic / screen recording) keys permissions
+    // off this, so it must be set and constant across releases.
+    appBundleId: 'com.metaquest.app',
     // Build for both Apple Silicon (arm64) and Intel (x64) Macs
     arch: ['x64', 'arm64'],
         // macOS requires these usage-description strings in Info.plist or it
         // will deny (and can crash) the app when it requests mic/camera access.
         extendInfo: {
-            NSMicrophoneUsageDescription: 'Meta Booster Pro uses the microphone to hear your questions and provide live answers during interviews.',
-            NSCameraUsageDescription: 'Meta Booster Pro may use the camera for video-based assistance.',
+            NSMicrophoneUsageDescription: 'MetaQuest uses the microphone to hear your questions and provide live answers during interviews.',
+            NSCameraUsageDescription: 'MetaQuest may use the camera for video-based assistance.',
         },
         // use `security find-identity -v -p codesigning` to find your identity
         // for macos signing
