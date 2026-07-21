@@ -56,6 +56,15 @@ export class AssistantView extends LitElement {
             color: var(--text-primary);
             border-bottom-right-radius: 4px;
         }
+        /* Connection/audio warnings surfaced in the transcript instead of the
+           header status text — visually distinct so they read as a system
+           notice rather than a normal AI answer. */
+        .chat-msg.answer.error {
+            background: rgba(241, 76, 76, 0.12);
+            border-color: rgba(241, 76, 76, 0.45);
+            color: #f14c4c;
+            white-space: pre-wrap;
+        }
         .chat-empty {
             color: var(--text-muted);
             font-size: var(--font-size-sm, 13px);
@@ -1169,10 +1178,14 @@ export class AssistantView extends LitElement {
                     // Back-compat: older entries may be bare strings (treated as answers).
                     const role = (resp && typeof resp === 'object') ? resp.role : 'answer';
                     const text = (resp && typeof resp === 'object') ? resp.text : resp;
+                    const isError = (resp && typeof resp === 'object') ? !!resp.isError : false;
                     if (role === 'question') {
                         return `<div class="chat-row left"><div class="chat-msg question" data-idx="${i}">${esc(text)}</div></div>`;
                     }
-                    return `<div class="chat-row right"><div class="chat-msg answer" data-idx="${i}">${this.renderMarkdown(text)}</div></div>`;
+                    // Connection/audio warnings surface here (in the transcript) so
+                    // they're visible where the user is actually looking, instead of
+                    // the small header status text where they were easy to miss.
+                    return `<div class="chat-row right"><div class="chat-msg answer${isError ? ' error' : ''}" data-idx="${i}">${isError ? esc(text) : this.renderMarkdown(text)}</div></div>`;
                 })
                 .join('');
 
@@ -1327,35 +1340,37 @@ export class AssistantView extends LitElement {
                     </button>
                 </div>
                 <div class="controls-row">
-                    <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
-                        ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
-                    </select>
-                    <button
-                        class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
-                        @click=${this.handleCaptureScreenshot}
-                        title="Add screen (${this._modLabel()}+Shift+Enter) — stack multiple screens for a long question, then Analyze/Solve"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/>
-                            <circle cx="12" cy="13" r="3"/>
-                        </svg>
-                        Add screen
-                        ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
-                    </button>
-                    <button
-                        class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
-                        @click=${this.handleScreenAnswer}
-                        title="${this.capturedCount > 0 ? `Solve ${this.capturedCount} captured screen(s)` : 'Analyze the current screen'} (${this._modLabel()}+Enter)"
-                    >
-                        <canvas class="analyze-canvas"></canvas>
-                        <span class="analyze-btn-content">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-                                <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" />
+                    ${!this.sessionActive ? '' : html`
+                        <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
+                            ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
+                        </select>
+                        <button
+                            class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
+                            @click=${this.handleCaptureScreenshot}
+                            title="Add screen (${this._modLabel()}+Shift+Enter) — stack multiple screens for a long question, then Analyze/Solve"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/>
+                                <circle cx="12" cy="13" r="3"/>
                             </svg>
-                            ${this.capturedCount > 0 ? `Solve (${this.capturedCount})` : 'Analyze Screen'}
-                        </span>
-                    </button>
-                    <span class="controls-spacer"></span>
+                            Add screen
+                            ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
+                        </button>
+                        <button
+                            class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
+                            @click=${this.handleScreenAnswer}
+                            title="${this.capturedCount > 0 ? `Solve ${this.capturedCount} captured screen(s)` : 'Analyze the current screen'} (${this._modLabel()}+Enter)"
+                        >
+                            <canvas class="analyze-canvas"></canvas>
+                            <span class="analyze-btn-content">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+                                    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" />
+                                </svg>
+                                ${this.capturedCount > 0 ? `Solve (${this.capturedCount})` : 'Analyze Screen'}
+                            </span>
+                        </button>
+                        <span class="controls-spacer"></span>
+                    `}
                     <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"/><circle cx="12" cy="12" r="3"/></g></svg>
                     </button>

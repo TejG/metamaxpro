@@ -49,10 +49,16 @@ let systemAudioProc = null;
 // Silence detection: wait for a short pause after speech before triggering the LLM.
 // Resets on every new transcription chunk.
 let transcriptionSilenceTimer = null;
-// How long to wait after the last speech chunk before answering. Lower = faster
-// perceived response; too low triggers on natural mid-sentence pauses. Tuned down
-// from 700ms → 400ms for a snappier (<1-2s) reply; override via GEMINI_SILENCE_MS.
-const SILENCE_THRESHOLD_MS = Number(process.env.GEMINI_SILENCE_MS) || 400;
+// How long to wait after the last speech chunk before answering. This was
+// previously tuned down to 400ms for a "snappier" feel, but 400ms is shorter
+// than a normal mid-sentence breathing/thinking pause — it made the assistant
+// start answering before the other person finished talking. 900ms comfortably
+// clears natural pauses while still feeling fast. Override via GEMINI_SILENCE_MS.
+const SILENCE_THRESHOLD_MS = Number(process.env.GEMINI_SILENCE_MS) || 900;
+// If the buffered transcription ends with one of these, the sentence is almost
+// certainly not finished yet (trailing conjunction/preposition/filler) — extend
+// the wait once instead of firing immediately, so we don't cut people off.
+const INCOMPLETE_TRAILING_WORDS = /\b(and|or|but|so|because|if|when|which|that|the|a|an|to|of|is|are|was|were|um|uh|like|actually|basically)$/i;
 let sessionReadyAt = 0;
 // Ignore transcription for a brief moment after connect so the session's initial
 // buffered audio doesn't fire a spurious answer. Override via GEMINI_WARMUP_MS.
@@ -151,13 +157,20 @@ function scheduleGroqTrigger() {
 
     cancelSilenceTimer();
 
+    // If the transcript so far trails off on a word that strongly suggests the
+    // sentence isn't finished ("...and", "...because", etc.), give it extra
+    // time before firing so we don't answer a half-asked question.
+    const trailing = currentTranscription.trim();
+    const looksUnfinished = INCOMPLETE_TRAILING_WORDS.test(trailing);
+    const waitMs = looksUnfinished ? SILENCE_THRESHOLD_MS * 2 : SILENCE_THRESHOLD_MS;
+
     transcriptionSilenceTimer = setTimeout(() => {
         transcriptionSilenceTimer = null;
         if (currentTranscription.trim() !== '') {
             routeAnswer(currentTranscription);
             currentTranscription = '';
         }
-    }, SILENCE_THRESHOLD_MS);
+    }, waitMs);
 }
 
 
@@ -225,9 +238,59 @@ const GEMINI_IMAGE_FALLBACKS = (process.env.GEMINI_IMAGE_FALLBACKS
     ? process.env.GEMINI_IMAGE_FALLBACKS.split(',').map(s => s.trim()).filter(Boolean)
     : ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
 
-// Build a deduped fallback list starting from the preferred model.
+// Build a deduped fallback list starting from the preferred model. Capped to 2
+// candidates total — trying all 5 configured models sequentially (each with
+// its own retries) on a rate-limited/unavailable key was previously adding
+// 15-20+ seconds to screenshot answers before ever giving up or falling back
+// to another provider.
 function buildImageModelFallbacks(preferred) {
-    return [preferred, ...GEMINI_IMAGE_FALLBACKS].filter((m, i, arr) => m && arr.indexOf(m) === i);
+    return [preferred, ...GEMINI_IMAGE_FALLBACKS].filter((m, i, arr) => m && arr.indexOf(m) === i).slice(0, 2);
+}
+
+// Gemini 2.5 Flash / Flash-Lite (what `gemini-flash-latest` now resolves to)
+// enable "thinking" — extra internal reasoning tokens generated BEFORE the first
+// visible token — by DEFAULT via the API. For a live interview assistant that
+// costs 10-40s of dead air before an answer starts streaming, which is exactly
+// what regressed screenshot answers from ~1-2s to 20-45s (older 1.5/2.0 Flash
+// models had no thinking). We don't need chain-of-thought for these fast,
+// speakable answers, so disable it with thinkingBudget: 0. This restores the
+// sub-2s time-to-first-token on every Gemini text and vision request below.
+const GEMINI_NO_THINKING = { thinkingConfig: { thinkingBudget: 0 } };
+// Reasoning-enabled Gemini config for questions that must be WORKED OUT
+// (aptitude, quantitative, logic, multiple-choice). thinkingBudget > 0 lets the
+// model reason internally before answering — the single biggest lever for
+// getting these right. Bounded (not dynamic -1) so latency stays predictable;
+// ~2k thinking tokens covers essentially all aptitude/arithmetic problems.
+const GEMINI_THINKING = { thinkingConfig: { thinkingBudget: 2048 } };
+
+// ── Adaptive answer effort ──────────────────────────────────────────
+// Decide whether a question must be WORKED OUT (one correct numeric/logical
+// answer) vs. answered conversationally. Reasoning questions get a
+// reasoning-capable model + low temperature + a longer latency budget; everyday
+// conversational/behavioral questions stay on the fast path. Conservative by
+// design: a false positive only makes a chatty answer slightly slower, while a
+// false negative is a fast wrong answer — so borderline cases lean toward
+// reasoning. Screenshots are treated as reasoning by default elsewhere (they're
+// almost always a problem to solve), so this is mainly for the audio/text path.
+const REASONING_STRONG_SIGNALS = [
+    /\b(calculate|compute|solve|evaluate|simplify|derive|prove|factor(?:ise|ize)?)\b/i,
+    /\b(how many|how much|what (?:is|are|will be) the|find (?:the|out)|determine the|value of)\b/i,
+    /\b(percent|percentage|ratio|proportion|average|mean|median|mode|probability|permutation|combination|factorial)\b/i,
+    /\b(profit|loss|interest|discount|speed|distance|velocity|acceleration|area|volume|perimeter|angle)\b/i,
+    /\b(series|sequence|next (?:number|term)|missing (?:number|term)|odd one out|analogy)\b/i,
+    /\b(syllogism|blood relation|seating|arrangement|ranking|coding[- ]decoding|direction sense)\b/i,
+    /\b(equation|solve for|integral|derivative|logarithm|square root|cube root|prime|factor)\b/i,
+    /\b(which of the following|choose the correct|correct (?:option|answer)|mark the|select the)\b/i,
+    /[=×÷√∑≥≤∫∏]|\b\d+\s*[-+*/^%]\s*\d+\b/,                 // math operators / "12 * 3"
+    /(?:^|\s)\(?[a-dA-D]\)[\s.]/,                            // MCQ markers: "a)" "B."
+];
+function questionNeedsReasoning(text) {
+    if (!text) return false;
+    const s = String(text);
+    if (REASONING_STRONG_SIGNALS.some(re => re.test(s))) return true;
+    // A bare number plus a question mark ("what's 15% of 240?") — a digit alone
+    // (e.g. "in 2020 I led...") is NOT enough, to avoid slowing behavioral answers.
+    return /\d/.test(s) && /\?/.test(s) && /\b(of|is|are|equal|total|sum|difference|left|remain|each|per)\b/i.test(s);
 }
 
 function isModelNotFoundError(err) {
@@ -461,11 +524,37 @@ async function routeAnswer(transcription) {
     groqConversationHistory.push({ role: 'user', content: lock ? `${intent}\n\n${lock}` : intent });
     if (groqConversationHistory.length > 20) groqConversationHistory = groqConversationHistory.slice(-20);
 
-    // Cascade: first provider that returns text wins.
+    // Adaptive effort: aptitude/quantitative/logic questions must be worked out,
+    // so they get a reasoning-capable model + low temperature + a longer latency
+    // budget. Everyday conversational questions stay on the fast path.
+    const reasoning = questionNeedsReasoning(intent);
+    if (reasoning) sendToRenderer('update-status', 'Working it out…');
+
+    // Cascade: first provider that returns text wins. Each provider gets a hard
+    // timeout — if it hasn't produced anything (no error, just slow/hanging) we
+    // abort it and move on rather than let it silently eat the whole budget.
+    // This is what kept 20-30s worst-case replies from happening: previously a
+    // stalled provider had no ceiling before falling through to the next one.
+    // Reasoning answers need the model to actually think, so they get a wider
+    // ceiling (a fast 8s abort would kill the reasoning that makes them correct).
+    const PROVIDER_TIMEOUT_MS = reasoning ? 22000 : 8000;
+    async function withTimeout(promiseFactory) {
+        let timedOut = false;
+        const timeout = new Promise(resolve => {
+            setTimeout(() => { timedOut = true; resolve(null); }, PROVIDER_TIMEOUT_MS);
+        });
+        const result = await Promise.race([promiseFactory(), timeout]);
+        if (timedOut && currentGroqAbortController) {
+            currentGroqAbortController.abort();
+            currentGroqAbortController = null;
+        }
+        return result;
+    }
+
     let answer = null;
-    if (hasGroqKey())                        answer = await _streamGroq();
-    if ((answer == null) && hasAnthropicKey()) answer = await _streamAnthropic();
-    if ((answer == null) && getApiKey())       answer = await _streamGemma();
+    if (hasGroqKey())                        answer = await withTimeout(() => _streamGroq(reasoning));
+    if ((answer == null) && hasAnthropicKey()) answer = await withTimeout(() => _streamAnthropic(reasoning));
+    if ((answer == null) && getApiKey())       answer = await withTimeout(() => _streamGemma(reasoning));
 
     if (answer == null || !answer.trim()) {
         sendToRenderer('update-response', '⚠️ Could not get an answer from any configured provider. Check your API keys in Settings.');
@@ -485,16 +574,25 @@ async function routeAnswer(transcription) {
 // the full answer text on success or null on any failure (so the cascade
 // continues). They do NOT push history, save, dedup, or emit bubbles.
 
-async function _streamGroq() {
+async function _streamGroq(reasoning = false) {
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) return null;
     if (currentGroqAbortController) { currentGroqAbortController.abort(); currentGroqAbortController = null; }
 
-    // Prefer a fast, non-reasoning model first (lowest time-to-first-token), then
-    // the rotation pick, then the rest. Reasoning models (gpt-oss) are slower.
+    // Model choice depends on the question type:
+    // - Reasoning (aptitude/math/logic): lead with a REASONING model (gpt-oss)
+    //   so the answer is actually worked out. A fast non-reasoning llama here is
+    //   exactly what produced fluent-but-wrong aptitude answers.
+    // - Conversational: lead with the fast non-reasoning llama for the lowest
+    //   time-to-first-token, then fall back.
+    // Capped to 3 candidates — trying all fallbacks sequentially on a bad key/
+    // outage can otherwise burn several seconds before ever reaching Anthropic/
+    // Gemini, which is what was causing 20-30s replies.
     const preferred = getModelForToday();
-    const candidates = ['llama-3.3-70b-versatile', preferred, ...GROQ_FALLBACK_MODELS]
-        .filter((m, i, a) => m && a.indexOf(m) === i);
+    const order = reasoning
+        ? ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', preferred, ...GROQ_FALLBACK_MODELS]
+        : ['llama-3.3-70b-versatile', preferred, ...GROQ_FALLBACK_MODELS];
+    const candidates = order.filter((m, i, a) => m && a.indexOf(m) === i).slice(0, 3);
     // Trim history to keep the request well under Groq's request-size cap (avoids 413).
     const trimmed = trimConversationHistoryForGemma(groqConversationHistory, 12000);
 
@@ -506,11 +604,13 @@ async function _streamGroq() {
                 model: candidate,
                 messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...trimmed],
                 stream: true,
-                temperature: 0.7,
-                max_tokens: 1024,
+                // Low temperature for reasoning: these have one correct answer, so
+                // deterministic beats "creative". Keep some variety for chat.
+                temperature: reasoning ? 0.1 : 0.4,
+                max_tokens: reasoning ? 2048 : 1024,
             };
-            if (/gpt-oss/i.test(candidate)) body.reasoning_effort = 'low';
-            else if (/qwen/i.test(candidate)) body.reasoning_effort = 'none';
+            if (/gpt-oss/i.test(candidate)) body.reasoning_effort = reasoning ? 'high' : 'low';
+            else if (/qwen/i.test(candidate)) body.reasoning_effort = reasoning ? 'default' : 'none';
 
             currentGroqAbortController = new AbortController();
             const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -572,7 +672,7 @@ async function _streamGroq() {
     }
 }
 
-async function _streamAnthropic() {
+async function _streamAnthropic(reasoning = false) {
     const key = getAnthropicApiKey();
     if (!key) return null;
     if (currentGroqAbortController) { currentGroqAbortController.abort(); currentGroqAbortController = null; }
@@ -580,6 +680,9 @@ async function _streamAnthropic() {
     if (!messages.length) return null;
     try {
         currentGroqAbortController = new AbortController();
+        // Fast-fail: this is one link in a provider cascade (Gemini is still
+        // available after this), so don't burn seconds of retry backoff here —
+        // 1 retry with a short delay, then move on.
         const response = await fetchWithAnthropicRetry(
             'https://api.anthropic.com/v1/messages',
             {
@@ -593,13 +696,15 @@ async function _streamAnthropic() {
                 signal: currentGroqAbortController.signal,
                 body: JSON.stringify({
                     model: 'claude-sonnet-4-6',
-                    max_tokens: 1024,
+                    max_tokens: reasoning ? 2048 : 1024,
                     system: currentSystemPrompt ? [{ type: 'text', text: currentSystemPrompt, cache_control: { type: 'ephemeral' } }] : undefined,
                     messages,
                     stream: true,
                 }),
             },
-            'Sonnet'
+            'Sonnet',
+            1,
+            400
         );
         if (!response) return null;
         if (!response.ok) {
@@ -641,7 +746,7 @@ async function _streamAnthropic() {
     }
 }
 
-async function _streamGemma() {
+async function _streamGemma(reasoning = false) {
     const apiKey = getApiKey();
     if (!apiKey) return null;
     const trimmed = trimConversationHistoryForGemma(groqConversationHistory, 42000);
@@ -655,8 +760,12 @@ async function _streamGemma() {
             ...messages,
         ];
         const chosenModel = getAvailableModel() || GEMINI_FALLBACK_MODEL;
-        console.log('[Gemini] answer using model:', chosenModel);
-        const response = await ai.models.generateContentStream({ model: chosenModel, contents });
+        console.log('[Gemini] answer using model:', chosenModel, reasoning ? '(reasoning)' : '(fast)');
+        const config = {
+            ...(reasoning ? GEMINI_THINKING : GEMINI_NO_THINKING),
+            temperature: reasoning ? 0.1 : 0.5,
+        };
+        const response = await ai.models.generateContentStream({ model: chosenModel, contents, config });
         let fullText = '';
         for await (const chunk of response) {
             const ct = chunk.text;
@@ -740,9 +849,12 @@ async function cleanTranscription(rawText, state = 'final') {
 // Retry fetch for Anthropic API — handles 429 (rate limit), 529 (overloaded), 500/503 (server error).
 // Respects abort signal: if the request is aborted mid-retry, returns null immediately.
 // Reads Retry-After header when present.
-async function fetchWithAnthropicRetry(url, options, label = 'Anthropic') {
-    const MAX_RETRIES = 3;
-    let delay = 1000;
+// `maxRetries`/`baseDelayMs` are tunable so cascade callers (which have another
+// provider to fall back to) can fail fast instead of burning several seconds
+// of retry backoff before ever reaching that fallback.
+async function fetchWithAnthropicRetry(url, options, label = 'Anthropic', maxRetries = 2, baseDelayMs = 500) {
+    const MAX_RETRIES = maxRetries;
+    let delay = baseDelayMs;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (options.signal?.aborted) return null;
@@ -763,12 +875,12 @@ async function fetchWithAnthropicRetry(url, options, label = 'Anthropic') {
         if (isRetryable && attempt < MAX_RETRIES) {
             const retryAfterHeader = response.headers?.get('retry-after');
             const waitMs = retryAfterHeader
-                ? Math.min(parseInt(retryAfterHeader, 10) * 1000, 10000)
+                ? Math.min(parseInt(retryAfterHeader, 10) * 1000, 4000)
                 : delay;
             console.log(`[${label}] ${status} — retry ${attempt + 1}/${MAX_RETRIES} in ${waitMs}ms`);
             sendToRenderer('update-status', `Retrying... (${attempt + 1}/${MAX_RETRIES})`);
             await new Promise(r => setTimeout(r, waitMs));
-            delay = Math.min(delay * 2, 8000);
+            delay = Math.min(delay * 2, 3000);
             continue;
         }
 
@@ -1085,6 +1197,7 @@ async function sendToGemma(transcription) {
         const response = await ai.models.generateContentStream({
             model: chosenModel,
             contents: messagesWithSystem,
+            config: GEMINI_NO_THINKING,
         });
 
         let fullText = '';
@@ -1407,6 +1520,13 @@ async function sendImagesToAnthropic(images, prompt) {
     }
 }
 
+// Groq vision-capable models to try, in order. Groq periodically retires/
+// renames preview vision models (e.g. llama-4-scout-17b-16e-instruct started
+// 404'ing with model_not_found for some accounts) — trying a short list here
+// keeps screenshot-solving on the fast Groq path instead of silently falling
+// all the way back to the much slower Gemini HTTP path on every request.
+const GROQ_VISION_MODELS = ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct'];
+
 // Solve screenshots with a Groq vision model (best-effort fallback for whisper
 // mode when no Gemini/Anthropic key is available). OpenAI-compatible format.
 async function sendImagesToGroqVision(images, prompt) {
@@ -1427,72 +1547,115 @@ async function sendImagesToGroqVision(images, prompt) {
         { role: 'user', content: userContent },
     ];
 
-    try {
-        currentGroqAbortController = new AbortController();
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-            signal: currentGroqAbortController.signal,
-            body: JSON.stringify({
-                model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-                messages,
-                stream: true,
-            }),
-        });
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error('[Groq] Vision API error:', response.status, errText);
-            return { success: false, error: `Groq vision error ${response.status}` };
-        }
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let fullText = '';
-        let streamBuffer = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            streamBuffer += decoder.decode(value, { stream: true });
-            const lines = streamBuffer.split('\n');
-            streamBuffer = lines.pop();
-            for (const line of lines) {
-                const t = line.trim();
-                if (!t.startsWith('data: ')) continue;
-                const data = t.slice(6);
-                if (data === '[DONE]') continue;
-                try {
-                    const json = JSON.parse(data);
-                    const delta = json.choices?.[0]?.delta?.content;
-                    if (delta) { fullText += delta; sendToRenderer('update-response', fullText); }
-                } catch (_) { /* skip malformed SSE lines */ }
+    let lastError = 'Groq vision error';
+    for (const model of GROQ_VISION_MODELS) {
+        try {
+            currentGroqAbortController = new AbortController();
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+                signal: currentGroqAbortController.signal,
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    stream: true,
+                    // Lower temperature for screenshot solving: this path now also
+                    // handles aptitude/quantitative questions where a low-temperature,
+                    // more deterministic pass at the arithmetic matters a lot more
+                    // than phrasing variety.
+                    temperature: 0.2,
+                }),
+            });
+            if (!response.ok) {
+                const errText = await response.text();
+                console.error(`[Groq] Vision API error (${model}):`, response.status, errText);
+                lastError = `Groq vision error ${response.status}`;
+                // A decommissioned/inaccessible model (404) is a config issue that
+                // will fail for every request — try the next candidate immediately
+                // rather than giving up. Other errors (4xx auth/429/5xx) aren't
+                // fixed by switching models, so bail out to the caller's fallback.
+                if (response.status === 404) continue;
+                return { success: false, error: lastError };
             }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let streamBuffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                streamBuffer += decoder.decode(value, { stream: true });
+                const lines = streamBuffer.split('\n');
+                streamBuffer = lines.pop();
+                for (const line of lines) {
+                    const t = line.trim();
+                    if (!t.startsWith('data: ')) continue;
+                    const data = t.slice(6);
+                    if (data === '[DONE]') continue;
+                    try {
+                        const json = JSON.parse(data);
+                        const delta = json.choices?.[0]?.delta?.content;
+                        if (delta) { fullText += delta; sendToRenderer('update-response', fullText); }
+                    } catch (_) { /* skip malformed SSE lines */ }
+                }
+            }
+            saveScreenAnalysis(prompt, fullText, 'groq-vision');
+            recordScreenTurnInHistory(fullText);
+            return { success: true, text: fullText, model: 'groq-vision' };
+        } catch (error) {
+            if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
+            console.error(`[Groq] Vision error (${model}):`, error);
+            lastError = error.message;
+        } finally {
+            currentGroqAbortController = null;
         }
-        saveScreenAnalysis(prompt, fullText, 'groq-vision');
-        recordScreenTurnInHistory(fullText);
-        return { success: true, text: fullText, model: 'groq-vision' };
-    } catch (error) {
-        if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
-        console.error('[Groq] Vision error:', error);
-        return { success: false, error: error.message };
-    } finally {
-        currentGroqAbortController = null;
     }
+    return { success: false, error: lastError };
 }
 
 // Route screenshot solving to a vision-capable provider based on the active
 // mode, with fallbacks so a solve works whenever ANY vision key is configured.
 // (cloud/local are handled by the IPC callers before this is reached.)
+//
+// Groq's hosted vision model is tried first whenever a Groq key is configured,
+// regardless of mode: Groq's inference is dramatically faster than Gemini's
+// free tier (which is also rate-limited and, on failure, was previously
+// retried across up to 5 candidate models × 2 attempts each — 15-20+ seconds
+// worst case). Gemini remains the fallback so quality/availability aren't lost,
+// it just no longer gates the fast path when a quicker option exists.
 async function routeImagesToProvider(images, prompt) {
-    if (currentProviderMode === 'anthropic' && getAnthropicApiKey()) {
-        return sendImagesToAnthropic(images, prompt);
+    // Screenshots are almost always a problem to SOLVE (coding, aptitude, MCQ,
+    // diagram), where correctness matters more than shaving a second. So prefer
+    // the strongest available reasoner and use Groq's fast-but-weak-at-reasoning
+    // llama-4 vision only as a last-resort fallback:
+    //   Anthropic (Claude vision) → Gemini (Flash + thinking) → Groq vision.
+    // (Previously Groq vision was tried FIRST for speed — that's a big part of
+    // why on-screen aptitude/quant questions came back fluent but wrong.)
+    const attempts = [];
+    if (getAnthropicApiKey()) attempts.push(() => sendImagesToAnthropic(images, prompt));
+    if (getApiKey())          attempts.push(() => sendMultipleImagesToGeminiHttp(images, prompt));
+    if (getGroqApiKey())      attempts.push(() => sendImagesToGroqVision(images, prompt));
+
+    // In explicit Anthropic mode, Claude leads; otherwise Gemini-with-thinking
+    // leads (byok's default key). Anthropic already sits first above, so only
+    // reorder to put Gemini first when NOT in Anthropic mode.
+    if (currentProviderMode !== 'anthropic' && getApiKey() && getAnthropicApiKey()) {
+        const gem = attempts.shift(); // Anthropic
+        attempts.splice(1, 0, gem);   // keep Gemini first, Anthropic second
     }
-    if (currentProviderMode === 'whisper' || currentProviderMode === 'anthropic') {
-        if (getApiKey()) return sendMultipleImagesToGeminiHttp(images, prompt);
-        if (getAnthropicApiKey()) return sendImagesToAnthropic(images, prompt);
-        if (getGroqApiKey()) return sendImagesToGroqVision(images, prompt);
+
+    if (attempts.length === 0) {
         return { success: false, error: 'No vision-capable API key configured — add a Gemini, Anthropic, or Groq key to analyze screenshots' };
     }
-    // Default (byok) — Gemini HTTP
-    return sendMultipleImagesToGeminiHttp(images, prompt);
+
+    let lastError = 'Vision request failed';
+    for (const attempt of attempts) {
+        const result = await attempt();
+        if (result && result.success) return result;
+        lastError = (result && result.error) || lastError;
+        console.log('[Vision] provider failed, falling back:', lastError);
+    }
+    return { success: false, error: lastError };
 }
 
 async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US', isReconnect = false) {
@@ -1955,7 +2118,12 @@ function buildImageRequest(imageParts, taskPrompt) {
         ...recentHistoryAsGeminiContents(),
         { role: 'user', parts: [...imageParts, { text: taskPrompt }] },
     ];
-    const config = {};
+    // A screenshot is almost always a PROBLEM to solve (a coding task, an
+    // aptitude/MCQ question, a diagram) rather than small talk, so enable
+    // reasoning here by default and keep temperature low for deterministic
+    // arithmetic/logic. This is what makes on-screen aptitude questions correct
+    // instead of a fast wrong guess.
+    const config = { ...GEMINI_THINKING, temperature: 0.1 };
     if (currentSystemPrompt && currentSystemPrompt.trim()) {
         config.systemInstruction = currentSystemPrompt;
     }
@@ -1994,9 +2162,10 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
         // Attempt a few transient network/fetch retries and also try alternate
         // model names if the API returns a 404 model-not-found error. We iterate
-        // through MODEL_FALLBACKS and for each model we allow a few internal
-        // attempts to handle transient failures.
-        const MAX_ATTEMPTS_PER_MODEL = 2;
+        // through MODEL_FALLBACKS (capped to 2) and allow only 1 attempt per
+        // model — a second attempt after a fixed backoff rarely helps and was
+        // doubling the worst-case wait when a model was unavailable/rate-limited.
+        const MAX_ATTEMPTS_PER_MODEL = 1;
         let response = null;
         let lastErr = null;
         for (const candidateModel of MODEL_FALLBACKS) {

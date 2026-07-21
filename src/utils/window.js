@@ -441,29 +441,108 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     // Instead of sitting in the taskbar, "minimize" hides the main window and
     // shows a small always-on-top mascot the user can drag and click to restore.
     let mascotWindow = null;
+    let genieAnimating = false;
 
-    function showMascot() {
-        if (mascotWindow && !mascotWindow.isDestroyed()) {
-            mascotWindow.showInactive();
-            return;
-        }
-        // Extra width/height leaves room for the speech bubble above the mascot.
+    // Easings. A genie should read as directional motion, not a symmetric
+    // ease-in-out: collapsing "sucks in" (accelerate toward the point), and
+    // restoring "pops out" (fast off the point, then settle). Expo curves give
+    // that snap; cubic in/out is kept for the neutral default.
+    function easeInOutCubic(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+    function easeInExpo(t) {
+        return t <= 0 ? 0 : Math.pow(2, 10 * (t - 1)); // accelerate into the point
+    }
+    function easeOutExpo(t) {
+        return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t); // burst out, then settle
+    }
+
+    // Animate a window's bounds + opacity from `from` to `to` over `durationMs`.
+    // This approximates macOS's native "genie" minimize (shrink + fade toward a
+    // point) cross-platform, since Electron doesn't expose the real Dock genie
+    // effect to arbitrary windows.
+    //
+    // The interpolation is driven by the REAL elapsed clock, not a frame counter.
+    // Each setBounds() on a full-size content window forces a synchronous reflow
+    // that regularly overruns a 16ms budget; a frame-counted loop then stutters
+    // (every backed-up tick advances the animation by one fixed step, so the
+    // motion lurches and the total duration stretches). Time-based interpolation
+    // self-corrects: a late tick simply lands at the position it *should* be at
+    // for that moment, so the motion stays smooth and finishes on schedule even
+    // when individual frames are dropped. `easing` lets callers pick the curve.
+    function animateWindowGenie(win, from, to, durationMs, onDone, easing = easeInOutCubic) {
+        if (!win || win.isDestroyed()) { if (onDone) onDone(); return; }
+
+        try { win.setOpacity(from.opacity); } catch (_) {}
+        try { win.setBounds({ x: Math.round(from.x), y: Math.round(from.y), width: Math.max(1, Math.round(from.width)), height: Math.max(1, Math.round(from.height)) }); } catch (_) {}
+
+        const startedAt = Date.now();
+        const finish = () => { if (onDone) onDone(); };
+
+        const timer = setInterval(() => {
+            if (win.isDestroyed()) { clearInterval(timer); finish(); return; }
+
+            const raw = Math.min(1, (Date.now() - startedAt) / durationMs);
+            const t = easing(raw);
+
+            const x = from.x + (to.x - from.x) * t;
+            const y = from.y + (to.y - from.y) * t;
+            const width = from.width + (to.width - from.width) * t;
+            const height = from.height + (to.height - from.height) * t;
+            const opacity = from.opacity + (to.opacity - from.opacity) * t;
+
+            try {
+                win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) });
+                win.setOpacity(Math.max(0, Math.min(1, opacity)));
+            } catch (_) { /* window may have been closed mid-animation */ }
+
+            if (raw >= 1) {
+                clearInterval(timer);
+                // Guarantee we land EXACTLY on the target (rounding during the
+                // loop can leave us a pixel short of the final bounds/opacity).
+                try {
+                    win.setBounds({ x: Math.round(to.x), y: Math.round(to.y), width: Math.max(1, Math.round(to.width)), height: Math.max(1, Math.round(to.height)) });
+                    win.setOpacity(Math.max(0, Math.min(1, to.opacity)));
+                } catch (_) {}
+                finish();
+            }
+        }, 1000 / 120); // tick at up to ~120fps; time-based math keeps it correct on any display
+    }
+
+    // Fixed target position/size for the mascot (bottom-left corner) — used both
+    // to place the mascot window and as the genie animation's collapse point.
+    function getMascotTargetBounds() {
         const winW = 220;
         const winH = 170;
         const primaryDisplay = screen.getPrimaryDisplay();
         const { height: shgt } = primaryDisplay.workAreaSize;
+        return { x: 24, y: shgt - winH - 24, width: winW, height: winH };
+    }
+
+    // `fromBounds` (optional) lets the caller genie-animate the mascot growing
+    // in from a specific point (e.g. where the main window shrank to) instead of
+    // just popping in at full size.
+    function showMascot(fromBounds = null) {
+        if (mascotWindow && !mascotWindow.isDestroyed()) {
+            mascotWindow.showInactive();
+            return;
+        }
+
+        const target = getMascotTargetBounds();
+        const start = fromBounds || { ...target, opacity: 0 };
 
         mascotWindow = new BrowserWindow({
-            width: winW,
-            height: winH,
-            x: 24,                    // bottom-left corner
-            y: shgt - winH - 24,
+            width: Math.max(1, Math.round(start.width)),
+            height: Math.max(1, Math.round(start.height)),
+            x: Math.round(start.x),
+            y: Math.round(start.y),
             frame: false,
             transparent: true,
             alwaysOnTop: true,
             resizable: false,
             hasShadow: false,
             skipTaskbar: true,
+            opacity: fromBounds ? (fromBounds.opacity ?? 0) : 0,
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false,
@@ -472,29 +551,128 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         mascotWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         mascotWindow.loadFile(path.join(__dirname, '../mascot.html'));
         mascotWindow.on('closed', () => { mascotWindow = null; });
+
+        // Genie "un-collapse": grow from the shrink point up to full mascot size
+        // while fading in, once content has painted.
+        mascotWindow.once('ready-to-show', () => {
+            animateWindowGenie(
+                mascotWindow,
+                { ...start, opacity: fromBounds ? (fromBounds.opacity ?? 0) : 0 },
+                { ...target, opacity: 1 },
+                240,
+                null,
+                easeOutExpo // pop out of the collapse point, then settle
+            );
+        });
     }
 
-    function hideMascot() {
-        if (mascotWindow && !mascotWindow.isDestroyed()) {
-            mascotWindow.close();
+    // `toBounds` (optional) lets the caller genie-animate the mascot shrinking
+    // toward a specific point (e.g. where the main window will grow back from)
+    // before actually closing it, instead of just vanishing instantly.
+    function hideMascot(toBounds = null, onDone = null) {
+        if (!mascotWindow || mascotWindow.isDestroyed()) {
+            mascotWindow = null;
+            if (onDone) onDone();
+            return;
         }
-        mascotWindow = null;
+        if (!toBounds) {
+            mascotWindow.close();
+            mascotWindow = null;
+            if (onDone) onDone();
+            return;
+        }
+        const target = getMascotTargetBounds();
+        const win = mascotWindow;
+        animateWindowGenie(
+            win,
+            { ...target, opacity: 1 },
+            { ...toBounds, opacity: 0 },
+            200,
+            () => {
+                if (!win.isDestroyed()) win.close();
+                mascotWindow = null;
+                if (onDone) onDone();
+            },
+            easeInExpo // accelerate as the mascot is sucked into the point
+        );
     }
 
     ipcMain.handle('minimize-to-mascot', () => {
-        if (!mainWindow.isDestroyed()) {
-            mainWindow.hide(); // hidden entirely — never in the taskbar
-        }
-        showMascot();
+        if (mainWindow.isDestroyed() || genieAnimating) return { success: false };
+        genieAnimating = true;
+
+        const originalBounds = mainWindow.getBounds();
+        const target = getMascotTargetBounds();
+        // Collapse the main window down into the mascot's target rect while
+        // fading it out — the "genie" shrink toward where the mascot will appear.
+        const collapsedBounds = {
+            x: target.x + target.width / 2 - 2,
+            y: target.y + target.height / 2 - 2,
+            width: 4,
+            height: 4,
+        };
+
+        // The window normally enforces a ~100x150 minimum size, which would
+        // clamp the shrink animation well before it reaches the collapse point.
+        // Relax it for the duration of the animation, then restore afterward.
+        try { mainWindow.setMinimumSize(1, 1); } catch (_) {}
+
+        animateWindowGenie(
+            mainWindow,
+            { ...originalBounds, opacity: 1 },
+            { ...collapsedBounds, opacity: 0 },
+            240,
+            () => {
+                if (!mainWindow.isDestroyed()) {
+                    mainWindow.hide(); // hidden entirely — never in the taskbar
+                    // Restore bounds/opacity/min-size now while invisible, so
+                    // it's ready to animate back in correctly next time.
+                    try { mainWindow.setBounds(originalBounds); } catch (_) {}
+                    try { mainWindow.setOpacity(1); } catch (_) {}
+                    try { mainWindow.setMinimumSize(Math.min(originalBounds.width, 100), Math.min(originalBounds.height, 150)); } catch (_) {}
+                }
+                // Grow the mascot in from that same collapsed point for a
+                // continuous, single genie motion instead of two disjoint ones.
+                showMascot({ ...collapsedBounds, opacity: 0 });
+                genieAnimating = false;
+            },
+            easeInExpo // accelerate as the window is sucked into the point
+        );
         return { success: true };
     });
 
     ipcMain.handle('restore-from-mascot', () => {
-        hideMascot();
-        if (!mainWindow.isDestroyed()) {
+        if (genieAnimating) return { success: false };
+        genieAnimating = true;
+
+        const target = getMascotTargetBounds();
+        const restoreBounds = mainWindow.isDestroyed() ? target : mainWindow.getBounds();
+        const collapsedBounds = {
+            x: target.x + target.width / 2 - 2,
+            y: target.y + target.height / 2 - 2,
+            width: 4,
+            height: 4,
+        };
+
+        // Shrink the mascot back down to that point, then grow the main window
+        // out from it — the reverse genie motion, restoring the window.
+        hideMascot(collapsedBounds, () => {
+            if (mainWindow.isDestroyed()) { genieAnimating = false; return; }
+            try { mainWindow.setMinimumSize(1, 1); } catch (_) {}
             mainWindow.show();
             mainWindow.focus();
-        }
+            animateWindowGenie(
+                mainWindow,
+                { ...collapsedBounds, opacity: 0 },
+                { ...restoreBounds, opacity: 1 },
+                240,
+                () => {
+                    try { mainWindow.setMinimumSize(Math.min(restoreBounds.width, 100), Math.min(restoreBounds.height, 150)); } catch (_) {}
+                    genieAnimating = false;
+                },
+                easeOutExpo // burst out of the point, then settle into place
+            );
+        });
         return { success: true };
     });
 

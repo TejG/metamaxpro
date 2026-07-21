@@ -233,10 +233,13 @@ export class MetaMaxProApp extends LitElement {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 var(--space-md);
-            background: var(--bg-surface);
-            border-bottom: 1px solid var(--border);
-            height: 36px;
+            padding: 0 var(--space-lg, 16px);
+            background: rgba(255, 255, 255, 0.08);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            backdrop-filter: blur(20px) saturate(180%);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 4px 16px rgba(0, 0, 0, 0.18);
+            height: 52px;
             -webkit-app-region: drag;
         }
 
@@ -273,8 +276,9 @@ export class MetaMaxProApp extends LitElement {
             position: absolute;
             left: 50%;
             transform: translateX(-50%);
-            font-size: var(--font-size-xs);
-            color: var(--text-muted);
+            font-size: var(--font-size-sm, 13px);
+            color: rgba(255, 255, 255, 0.92);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
             font-weight: var(--font-weight-medium);
             white-space: nowrap;
             pointer-events: none;
@@ -289,8 +293,10 @@ export class MetaMaxProApp extends LitElement {
         }
 
         .live-bar-text {
-            font-size: var(--font-size-xs);
-            color: var(--text-muted);
+            font-size: var(--font-size-sm, 13px);
+            color: rgba(255, 255, 255, 0.92);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+            font-weight: var(--font-weight-medium, 500);
             font-family: var(--font-mono);
             white-space: nowrap;
         }
@@ -309,10 +315,10 @@ export class MetaMaxProApp extends LitElement {
             -webkit-app-region: no-drag;
             background: transparent;
             border: none;
-            color: var(--text-muted);
-            width: 26px;
-            height: 22px;
-            border-radius: 6px;
+            color: rgba(255, 255, 255, 0.85);
+            width: 28px;
+            height: 26px;
+            border-radius: 7px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -320,8 +326,8 @@ export class MetaMaxProApp extends LitElement {
             transition: background var(--transition), color var(--transition);
         }
         .win-btn:hover {
-            background: var(--bg-hover, rgba(128,128,128,0.18));
-            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.14);
+            color: #ffffff;
         }
         .win-btn.close:hover {
             background: #e5484d;
@@ -333,6 +339,22 @@ export class MetaMaxProApp extends LitElement {
             font-size: 12px;
             font-weight: 600;
             font-family: var(--font);
+        }
+        /* Start/Stop session toggle — green play icon when stopped, red square
+           when a session is live, so the state is unambiguous at a glance. */
+        .win-btn.session-toggle-btn {
+            color: #2fbf71;
+        }
+        .win-btn.session-toggle-btn:hover {
+            background: rgba(47, 191, 113, 0.18);
+            color: #2fbf71;
+        }
+        .win-btn.session-toggle-btn.is-active {
+            color: #e5484d;
+        }
+        .win-btn.session-toggle-btn.is-active:hover {
+            background: rgba(229, 72, 77, 0.18);
+            color: #e5484d;
         }
 
         /* Content inner */
@@ -548,6 +570,7 @@ export class MetaMaxProApp extends LitElement {
         this._updateAvailable = false;
         this._whisperDownloading = false;
         this._localVersion = '';
+        this._lastChatError = null;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -675,11 +698,35 @@ export class MetaMaxProApp extends LitElement {
 
     // ── Status & Responses ──
 
+    // Audio/connection errors were previously only shown as small text in the
+    // live-bar (header), where they're easy to miss and get overwritten by the
+    // next "Listening..."/"Thinking..." status a moment later. They now show up
+    // as a message in the chat transcript itself (where the user is actually
+    // looking), same as any other assistant response.
     setStatus(text) {
         this.statusText = text;
         if (text.includes('Ready') || text.includes('Listening') || text.includes('Error')) {
             this._currentResponseIsComplete = true;
         }
+
+        if (this._isErrorStatus(text)) {
+            this._showStatusErrorInChat(text);
+        }
+    }
+
+    _isErrorStatus(text) {
+        if (!text) return false;
+        return /^⚠️|\berror\b|\bfailed\b|\bunavailable\b/i.test(text);
+    }
+
+    _showStatusErrorInChat(text) {
+        // Avoid spamming the transcript if the same warning fires repeatedly
+        // (e.g. the audio helper retries and reports the same message).
+        if (text === this._lastChatError) return;
+        this._lastChatError = text;
+        this.responses = [...this.responses, { role: 'answer', text, isError: true }];
+        this.currentResponseIndex = this.responses.length - 1;
+        this.requestUpdate();
     }
 
     // Transcribed audio / typed question → a left-aligned chat bubble.
@@ -775,6 +822,30 @@ export class MetaMaxProApp extends LitElement {
                 const { ipcRenderer } = window.require('electron');
                 await ipcRenderer.invoke('quit-application');
             }
+        }
+    }
+
+    // Explicit "Stop" for the session start/stop toggle in the live bar — ends
+    // capture/the live session but stays on the assistant screen (unlike the
+    // close button, which quits the app from other views). Named separately
+    // from handleClose so the intent at each call site is unambiguous.
+    async handleStop() {
+        metaMaxPro.stopCapture();
+        if (window.require) {
+            const { ipcRenderer } = window.require('electron');
+            await ipcRenderer.invoke('close-session');
+        }
+        this.sessionActive = false;
+        this._stopTimer();
+        this.requestUpdate();
+    }
+
+    // Toggle used by the start/stop icon in the live bar.
+    async handleToggleSession() {
+        if (this.sessionActive) {
+            await this.handleStop();
+        } else {
+            await this.handleStart();
         }
     }
 
@@ -1141,9 +1212,18 @@ export class MetaMaxProApp extends LitElement {
                 </div>
                 <div class="live-bar-center"></div>
                 <div class="live-bar-right">
-                    ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
+                    ${(this.statusText && !this._isErrorStatus(this.statusText)) ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>
                     ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
+                    <button
+                        class="win-btn session-toggle-btn ${this.sessionActive ? 'is-active' : ''}"
+                        @click=${() => this.handleToggleSession()}
+                        title=${this.sessionActive ? 'Stop session' : 'Start session'}
+                    >
+                        ${this.sessionActive
+                            ? html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`
+                            : html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`}
+                    </button>
                     <button class="win-btn font-btn" @click=${() => this._changeFontSize(-1)} title="Smaller text">A−</button>
                     <button class="win-btn font-btn" @click=${() => this._changeFontSize(1)} title="Larger text">A+</button>
                     <button class="win-btn" @click=${() => this._handleMinimize()} title="Minimize to mascot">
