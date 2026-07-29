@@ -237,7 +237,7 @@ export class MetaMaxProApp extends LitElement {
             background: rgba(255, 255, 255, 0.08);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             backdrop-filter: blur(20px) saturate(180%);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.222)
             box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 4px 16px rgba(0, 0, 0, 0.18);
             height: 52px;
             -webkit-app-region: drag;
@@ -587,10 +587,7 @@ export class MetaMaxProApp extends LitElement {
 
     async _loadFromStorage() {
         try {
-            const [config, prefs] = await Promise.all([
-                metaMaxPro.storage.getConfig(),
-                metaMaxPro.storage.getPreferences()
-            ]);
+            const [config, prefs] = await Promise.all([metaMaxPro.storage.getConfig(), metaMaxPro.storage.getPreferences()]);
 
             // Decide the entry view. Onboarding gates the first run AND any later
             // launch where a required OS permission is missing (e.g. the user
@@ -643,9 +640,13 @@ export class MetaMaxProApp extends LitElement {
             ipcRenderer.on('new-response', (_, response) => this.addNewResponse(response));
             ipcRenderer.on('update-response', (_, response) => this.updateCurrentResponse(response));
             ipcRenderer.on('update-status', (_, status) => this.setStatus(status));
-            ipcRenderer.on('click-through-toggled', (_, isEnabled) => { this._isClickThrough = isEnabled; });
+            ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
+                this._isClickThrough = isEnabled;
+            });
             ipcRenderer.on('reconnect-failed', (_, data) => this.addNewResponse(data.message));
-            ipcRenderer.on('whisper-downloading', (_, downloading) => { this._whisperDownloading = downloading; });
+            ipcRenderer.on('whisper-downloading', (_, downloading) => {
+                this._whisperDownloading = downloading;
+            });
         }
 
         // If a required permission gets revoked while running, catch it when the
@@ -778,18 +779,20 @@ export class MetaMaxProApp extends LitElement {
         return raw.replace(/```(\w*\n)?([\s\S]*?)```/g, (m, langLine, code) => {
             const lang = (langLine || '').trim().replace(/\n$/, '').replace(/^\s*/, '');
             const lines = code.split('\n');
-            const transformed = lines.map(line => {
-                if (/^\+\s*/.test(line)) {
-                    return `<div class="correction addition">${this._escapeHtml(line)}</div>`;
-                }
-                if (/^-\s*/.test(line)) {
-                    return `<div class="correction deletion">${this._escapeHtml(line)}</div>`;
-                }
-                if (/^\s*(\/\/|#|\/\*|\*)/.test(line)) {
-                    return `<div class="comment-line">${this._escapeHtml(line)}</div>`;
-                }
-                return `<div class="code-line">${this._escapeHtml(line)}</div>`;
-            }).join('\n');
+            const transformed = lines
+                .map(line => {
+                    if (/^\+\s*/.test(line)) {
+                        return `<div class="correction addition">${this._escapeHtml(line)}</div>`;
+                    }
+                    if (/^-\s*/.test(line)) {
+                        return `<div class="correction deletion">${this._escapeHtml(line)}</div>`;
+                    }
+                    if (/^\s*(\/\/|#|\/\*|\*)/.test(line)) {
+                        return `<div class="comment-line">${this._escapeHtml(line)}</div>`;
+                    }
+                    return `<div class="code-line">${this._escapeHtml(line)}</div>`;
+                })
+                .join('\n');
 
             // Rebuild as HTML-wrapped code block — keep language hint for tooling
             return `<pre><code class="language-${lang}">${transformed}</code></pre>`;
@@ -872,7 +875,9 @@ export class MetaMaxProApp extends LitElement {
         this._fontSize = next;
         document.documentElement.style.setProperty('--response-font-size', `${next}px`);
         this.requestUpdate();
-        try { await metaMaxPro.storage.updatePreference('fontSize', next); } catch (_) {}
+        try {
+            await metaMaxPro.storage.updatePreference('fontSize', next);
+        } catch (_) {}
     }
 
     async handleHideToggle() {
@@ -895,11 +900,23 @@ export class MetaMaxProApp extends LitElement {
             this._startTimer();
         };
 
-        // Single unified mode: the user's own keys. Gemini powers live
-        // transcription; Groq/Anthropic (from the keys) generate answers and
-        // solve screenshots. Requires a Gemini key; otherwise the chat shows
-        // the "Session not started · Settings" banner.
+        // Whisper-first audio pipeline: SystemAudioDump → VAD → Groq Whisper
+        // (whisper-large-v3-turbo) → routeAnswer. Transcripts are routed the
+        // moment end-of-speech is detected, so answers render for THIS question
+        // (no turn-complete lag), and the listener re-arms immediately after
+        // each transcription. Falls back to Gemini Live only if no Groq key.
         try {
+            const groqKey = await metaMaxPro.storage.getGroqApiKey().catch(() => '');
+            if (groqKey && groqKey.trim() !== '') {
+                await metaMaxPro.storage.updatePreference('providerMode', 'whisper');
+                const ok = await metaMaxPro.initializeWhisper(this.selectedProfile);
+                if (ok) {
+                    startSession();
+                    return;
+                }
+                console.error('Whisper init failed, falling back to Gemini Live');
+            }
+
             const apiKey = await metaMaxPro.storage.getApiKey().catch(() => '');
             if (!apiKey || apiKey.trim() === '') {
                 this.sessionActive = false;
@@ -1142,47 +1159,117 @@ export class MetaMaxProApp extends LitElement {
             <div class="settings-shell">
                 <div class="settings-tabbar">
                     <button class="settings-tab home" @click=${() => this.navigate('assistant')} title="Back to chat">‹ Chat</button>
-                    ${tabs.map(t => html`
-                        <button
-                            class="settings-tab ${this.settingsTab === t.id ? 'active' : ''}"
-                            @click=${() => { this.settingsTab = t.id; }}
-                        >${t.label}</button>
-                    `)}
+                    ${tabs.map(
+                        t => html`
+                            <button
+                                class="settings-tab ${this.settingsTab === t.id ? 'active' : ''}"
+                                @click=${() => {
+                                this.settingsTab = t.id;
+                            }}
+                            >
+                                ${t.label}
+                            </button>
+                        `
+                    )}
                 </div>
-                <div class="settings-body">
-                    ${this.renderSettingsSection()}
-                </div>
+                <div class="settings-body">${this.renderSettingsSection()}</div>
             </div>
         `;
     }
 
     renderSidebar() {
         const items = [
-            { id: 'main', label: 'Home', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"/><path d="M16 15c-2.21 1.333-5.792 1.333-8 0"/></g></svg>` },
-            { id: 'ai-customize', label: 'AI Customization', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" /></svg>` },
-            { id: 'history', label: 'History', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"/><path d="M12 8v4l3 3"/></g></svg>` },
-            { id: 'customize', label: 'Settings', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"/><path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0"/></g></svg>` },
-            { id: 'feedback', label: 'Feedback', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01"/><path d="M9.5 13a3.5 3.5 0 0 0 5 0"/></g></svg>` },
-            { id: 'help', label: 'Help', icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01"/><path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483"/></g></svg>` },
+            {
+                id: 'main',
+                label: 'Home',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"
+                        />
+                        <path d="M16 15c-2.21 1.333-5.792 1.333-8 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'ai-customize',
+                label: 'AI Customization',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <path
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M13 3v7h6l-8 11v-7H5z"
+                    />
+                </svg>`,
+            },
+            {
+                id: 'history',
+                label: 'History',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"
+                        />
+                        <path d="M12 8v4l3 3" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'customize',
+                label: 'Settings',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path
+                            d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"
+                        />
+                        <path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'feedback',
+                label: 'Feedback',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01" />
+                        <path d="M9.5 13a3.5 3.5 0 0 0 5 0" />
+                    </g>
+                </svg>`,
+            },
+            {
+                id: 'help',
+                label: 'Help',
+                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                        <path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01" />
+                        <path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483" />
+                    </g>
+                </svg>`,
+            },
         ];
 
-    // When on the main view, MainView renders its own nav and controls.
-    // Avoid duplicating the navigation here.
-    if (this.currentView === 'main') return '';
+        // When on the main view, MainView renders its own nav and controls.
+        // Avoid duplicating the navigation here.
+        if (this.currentView === 'main') return '';
 
         return html`
             <div class="bottom-nav ${this._isLiveMode() ? 'hidden' : ''}">
                 <div class="bottom-nav-inner">
-                    ${items.map(item => html`
-                        <button
-                            class="nav-item ${this.currentView === item.id ? 'active' : ''}"
-                            @click=${() => this.navigate(item.id)}
-                            title=${item.label}
-                        >
-                            ${item.icon}
-                            <div style="font-size:12px;">${item.label}</div>
-                        </button>
-                    `)}
+                    ${items.map(
+                        item => html`
+                            <button
+                                class="nav-item ${this.currentView === item.id ? 'active' : ''}"
+                                @click=${() => this.navigate(item.id)}
+                                title=${item.label}
+                            >
+                                ${item.icon}
+                                <div style="font-size:12px;">${item.label}</div>
+                            </button>
+                        `
+                    )}
                 </div>
             </div>
         `;
@@ -1208,11 +1295,13 @@ export class MetaMaxProApp extends LitElement {
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
+                    <span class="live-bar-text">Meta Booster</span>
+                </div>
+                <div class="live-bar-center">
                     <span class="live-bar-text">${profileLabels[this.selectedProfile] || 'Session'}</span>
                 </div>
-                <div class="live-bar-center"></div>
                 <div class="live-bar-right">
-                    ${(this.statusText && !this._isErrorStatus(this.statusText)) ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
+                    ${this.statusText && !this._isErrorStatus(this.statusText) ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>
                     ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
                     <button
@@ -1220,17 +1309,46 @@ export class MetaMaxProApp extends LitElement {
                         @click=${() => this.handleToggleSession()}
                         title=${this.sessionActive ? 'Stop session' : 'Start session'}
                     >
-                        ${this.sessionActive
-                            ? html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`
-                            : html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`}
+                        ${
+                            this.sessionActive
+                                ? html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                                  </svg>`
+                                : html`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                      <path d="M8 5v14l11-7z" />
+                                  </svg>`
+                        }
                     </button>
                     <button class="win-btn font-btn" @click=${() => this._changeFontSize(-1)} title="Smaller text">A−</button>
                     <button class="win-btn font-btn" @click=${() => this._changeFontSize(1)} title="Larger text">A+</button>
                     <button class="win-btn" @click=${() => this._handleMinimize()} title="Minimize to mascot">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        >
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
                     </button>
                     <button class="win-btn close" @click=${() => this._handleQuit()} title="Close">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        >
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                            <line x1="6" y1="18" x2="18" y2="6" />
+                        </svg>
                     </button>
                 </div>
             </div>
@@ -1240,11 +1358,7 @@ export class MetaMaxProApp extends LitElement {
     render() {
         // Onboarding is fullscreen, no sidebar
         if (this.currentView === 'onboarding') {
-            return html`
-                <div class="fullscreen">
-                    ${this.renderCurrentView()}
-                </div>
-            `;
+            return html` <div class="fullscreen">${this.renderCurrentView()}</div> `;
         }
 
         const isLive = this._isLiveMode();
@@ -1261,9 +1375,7 @@ export class MetaMaxProApp extends LitElement {
                 </div>
                 <div class="content">
                     ${isLive ? this.renderLiveBar() : ''}
-                    <div class="content-inner ${isLive ? 'live' : ''}">
-                        ${this.renderCurrentView()}
-                    </div>
+                    <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
             </div>
         `;

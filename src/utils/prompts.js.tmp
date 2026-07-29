@@ -1,3 +1,0 @@
-// Temporary prompts file for safe replacement
-const profilePrompts = { test: { intro: 'temp' } };
-module.exports = { profilePrompts };

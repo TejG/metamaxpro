@@ -1,9 +1,10 @@
 const { getGroqApiKey } = require('../storage');
+const telemetry = require('./llm/telemetry');
 
 // Voice Activity Detection parameters
 // Lowered default RMS threshold to better detect system audio levels.
-const SPEECH_RMS_THRESHOLD = 800;   // Was 3000 — lowered to detect quieter system audio
-const SILENCE_DURATION_MS = 1800;   // Increased to 1.8 seconds to allow for natural mid-sentence pauses
+const SPEECH_RMS_THRESHOLD = 800; // Was 3000 — lowered to detect quieter system audio
+const SILENCE_DURATION_MS = 1800; // Increased to 1.8 seconds to allow for natural mid-sentence pauses
 const MIN_SPEECH_DURATION_MS = 250; // Quicker response for short utterances
 const MAX_BUFFER_DURATION_MS = 45000; // Trigger STT forcefully if they talk for >45s
 const SAMPLE_RATE = 16000;
@@ -15,6 +16,9 @@ let silenceTimer = null;
 let onTranscriptionCallback = null;
 let isActive = false;
 let noiseFloor = 300; // adaptive baseline
+// Ceiling for the adaptive noise floor: keeps dynamicThreshold ≤ ~2× the base
+// speech threshold, guaranteeing normal speech can always re-trigger the VAD.
+const NOISE_FLOOR_MAX = SPEECH_RMS_THRESHOLD;
 
 // Calculate RMS amplitude of a mono 16-bit PCM buffer
 function getRms(pcmBuffer) {
@@ -61,7 +65,7 @@ function pcmToWavBuffer(pcmBuffer) {
 
 async function triggerTranscription() {
     cancelSilenceTimer();
-    
+
     if (!onTranscriptionCallback || speechBuffer.length === 0) return;
 
     const buffer = speechBuffer;
@@ -77,8 +81,11 @@ async function triggerTranscription() {
     console.log(`[Whisper VAD] Transcribing ${(durationMs / 1000).toFixed(1)}s of audio...`);
 
     try {
+        telemetry.reset();
+        telemetry.mark('speechEnd');
         const transcript = await transcribeWithGroq(buffer);
         if (transcript && transcript.trim() !== '') {
+            telemetry.mark('transcriptReady');
             console.log(`[Whisper] "${transcript}"`);
             onTranscriptionCallback(transcript);
         }
@@ -102,7 +109,7 @@ async function transcribeWithGroq(pcmBuffer) {
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+        headers: { Authorization: `Bearer ${apiKey}` },
         body: formData,
     });
 
@@ -121,18 +128,31 @@ function processAudioChunk(monoChunk) {
 
     const rms = getRms(monoChunk);
 
-    // Slowly adapt the noise floor when someone is NOT actively speaking
+    // Adapt the noise floor when someone is NOT actively speaking.
+    // ASYMMETRIC on purpose: drop quickly when the room gets quieter, but rise
+    // very slowly when it gets louder. The previous symmetric 0.8/0.2 EMA let
+    // ambient/system audio between questions drag the floor up to speech level
+    // within seconds — dynamicThreshold then exceeded real speech RMS and the
+    // VAD never triggered again after the first question ("listener halts").
+    // NOISE_FLOOR_MAX hard-caps the floor so speech can always break through.
     if (!isSpeaking) {
-        noiseFloor = (noiseFloor * 0.8) + (rms * 0.2);
+        if (rms < noiseFloor) {
+            noiseFloor = noiseFloor * 0.7 + rms * 0.3; // fast decay to quieter ambient
+        } else {
+            noiseFloor = noiseFloor * 0.98 + rms * 0.02; // very slow rise
+        }
+        noiseFloor = Math.min(noiseFloor, NOISE_FLOOR_MAX);
     }
-    
+
     // Dynamic threshold: at least SPEECH_RMS_THRESHOLD, but dynamically scales
     // above ambient room noise (e.g. static/humming). Use a milder multiplier
     // so quieter system audio isn't accidentally treated as silence.
     const dynamicThreshold = Math.max(SPEECH_RMS_THRESHOLD, noiseFloor * 1.8);
 
     if (process.env.DEBUG_AUDIO) {
-        console.log(`[Whisper VAD DEBUG] RMS: ${rms.toFixed(0)}, noiseFloor: ${noiseFloor.toFixed(0)}, dynamicThreshold: ${dynamicThreshold.toFixed(0)}`);
+        console.log(
+            `[Whisper VAD DEBUG] RMS: ${rms.toFixed(0)}, noiseFloor: ${noiseFloor.toFixed(0)}, dynamicThreshold: ${dynamicThreshold.toFixed(0)}`
+        );
     }
 
     if (rms > dynamicThreshold) {

@@ -92,7 +92,7 @@ export class FeedbackView extends LitElement {
                 user-select: none;
             }
 
-            .attach-info input[type="checkbox"] {
+            .attach-info input[type='checkbox'] {
                 cursor: pointer;
                 accent-color: var(--accent);
             }
@@ -194,7 +194,9 @@ export class FeedbackView extends LitElement {
                                 class="feedback-input"
                                 placeholder="Bug reports, feature requests, anything..."
                                 .value=${this._feedbackText}
-                                @input=${e => { this._feedbackText = e.target.value; }}
+                                @input=${e => {
+                                    this._feedbackText = e.target.value;
+                                }}
                                 maxlength="2000"
                             ></textarea>
                             <input
@@ -202,13 +204,17 @@ export class FeedbackView extends LitElement {
                                 type="email"
                                 placeholder="Email (optional)"
                                 .value=${this._feedbackEmail}
-                                @input=${e => { this._feedbackEmail = e.target.value; }}
+                                @input=${e => {
+                                    this._feedbackEmail = e.target.value;
+                                }}
                             />
                             <label class="attach-info">
                                 <input
                                     type="checkbox"
                                     .checked=${this._attachInfo}
-                                    @change=${e => { this._attachInfo = e.target.checked; }}
+                                    @change=${e => {
+                                        this._attachInfo = e.target.checked;
+                                    }}
                                 />
                                 Attach OS and app version
                             </label>
@@ -220,11 +226,15 @@ export class FeedbackView extends LitElement {
                                 >
                                     ${this._feedbackSending ? 'Sending...' : 'Send Feedback'}
                                 </button>
-                                ${this._feedbackStatus ? html`
-                                    <span class="feedback-status ${this._feedbackStatus.split(':')[0]}">
-                                        ${this._feedbackStatus.split(':').slice(1).join(':')}
-                                    </span>
-                                ` : ''}
+                                ${
+                                    this._feedbackStatus
+                                        ? html`
+                                              <span class="feedback-status ${this._feedbackStatus.split(':')[0]}">
+                                                  ${this._feedbackStatus.split(':').slice(1).join(':')}
+                                              </span>
+                                          `
+                                        : ''
+                                }
                             </div>
                         </div>
                     </section>

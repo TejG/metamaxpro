@@ -4,7 +4,7 @@ if (require('electron-squirrel-startup')) {
 
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
-const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
+const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/llm');
 const storage = require('./storage');
 
 // In-app auto-update. Uses update.electronjs.org (a free, hosted Squirrel feed
@@ -59,7 +59,9 @@ app.whenReady().then(async () => {
         }
         try {
             console.log('[Permissions] screen recording status:', systemPreferences.getMediaAccessStatus('screen'));
-        } catch (_) { /* older macOS — ignore */ }
+        } catch (_) {
+            /* older macOS — ignore */
+        }
     }
 
     createMainWindow();
@@ -351,8 +353,12 @@ function setupGeneralIpcHandlers() {
         const { systemPreferences } = require('electron');
         let screen = 'unknown';
         let microphone = 'unknown';
-        try { screen = systemPreferences.getMediaAccessStatus('screen'); } catch (_) {}
-        try { microphone = systemPreferences.getMediaAccessStatus('microphone'); } catch (_) {}
+        try {
+            screen = systemPreferences.getMediaAccessStatus('screen');
+        } catch (_) {}
+        try {
+            microphone = systemPreferences.getMediaAccessStatus('microphone');
+        } catch (_) {}
         return { platform: 'darwin', screen, microphone };
     });
 
@@ -390,9 +396,10 @@ function setupGeneralIpcHandlers() {
         try {
             let url;
             if (process.platform === 'darwin') {
-                url = which === 'microphone'
-                    ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
-                    : 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
+                url =
+                    which === 'microphone'
+                        ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+                        : 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
             } else if (process.platform === 'win32') {
                 url = which === 'microphone' ? 'ms-settings:privacy-microphone' : 'ms-settings:privacy-webcam';
             } else {

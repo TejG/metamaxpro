@@ -34,8 +34,12 @@ export class AssistantView extends LitElement {
             display: flex;
             margin: 8px 0;
         }
-        .chat-row.left { justify-content: flex-start; }
-        .chat-row.right { justify-content: flex-end; }
+        .chat-row.left {
+            justify-content: flex-start;
+        }
+        .chat-row.right {
+            justify-content: flex-end;
+        }
         .chat-msg {
             border: 1px solid var(--border);
             border-radius: 14px;
@@ -80,7 +84,9 @@ export class AssistantView extends LitElement {
             margin-top: 6px;
             flex-wrap: wrap;
         }
-        .controls-spacer { flex: 1; }
+        .controls-spacer {
+            flex: 1;
+        }
         .profile-select {
             background: var(--bg-elevated);
             border: 1px solid var(--border);
@@ -93,7 +99,8 @@ export class AssistantView extends LitElement {
             cursor: pointer;
             flex: 0 0 auto;
         }
-        .gear-btn, .send-btn {
+        .gear-btn,
+        .send-btn {
             background: var(--bg-elevated);
             border: 1px solid var(--border);
             color: var(--text-primary);
@@ -105,13 +112,19 @@ export class AssistantView extends LitElement {
             justify-content: center;
             cursor: pointer;
             flex: 0 0 auto;
-            transition: border-color var(--transition), background var(--transition);
+            transition:
+                border-color var(--transition),
+                background var(--transition);
         }
-        .gear-btn:hover, .send-btn:hover:not(:disabled) {
+        .gear-btn:hover,
+        .send-btn:hover:not(:disabled) {
             border-color: var(--accent);
             background: var(--bg-surface);
         }
-        .send-btn:disabled { opacity: 0.4; cursor: default; }
+        .send-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
 
         /* ── Not-started banner ── */
         .start-banner {
@@ -124,7 +137,11 @@ export class AssistantView extends LitElement {
             border-radius: var(--radius-md, 10px);
             background: var(--bg-elevated);
         }
-        .start-banner-text { color: var(--text-secondary); font-size: var(--font-size-sm, 13px); flex: 1; }
+        .start-banner-text {
+            color: var(--text-secondary);
+            font-size: var(--font-size-sm, 13px);
+            flex: 1;
+        }
         .start-inline-btn {
             background: var(--btn-primary-bg, var(--accent));
             color: var(--btn-primary-text, var(--bg-app));
@@ -161,12 +178,22 @@ export class AssistantView extends LitElement {
             font-weight: var(--font-weight-semibold);
         }
 
-        .response-container h1 { font-size: 1.5em; }
-        .response-container h2 { font-size: 1.3em; }
-        .response-container h3 { font-size: 1.15em; }
-        .response-container h4 { font-size: 1.05em; }
+        .response-container h1 {
+            font-size: 1.5em;
+        }
+        .response-container h2 {
+            font-size: 1.3em;
+        }
+        .response-container h3 {
+            font-size: 1.15em;
+        }
+        .response-container h4 {
+            font-size: 1.05em;
+        }
         .response-container h5,
-        .response-container h6 { font-size: 1em; }
+        .response-container h6 {
+            font-size: 1em;
+        }
 
         .response-container p {
             margin: 0.6em 0;
@@ -210,12 +237,14 @@ export class AssistantView extends LitElement {
         }
 
         /* Copy button for code blocks */
-        .response-container pre { position: relative; }
+        .response-container pre {
+            position: relative;
+        }
         .code-copy-btn {
             position: absolute;
             top: 6px;
             right: 6px;
-            background: rgba(0,0,0,0.55);
+            background: rgba(0, 0, 0, 0.55);
             color: #fff;
             border: none;
             padding: 6px 8px;
@@ -223,10 +252,14 @@ export class AssistantView extends LitElement {
             border-radius: 6px;
             cursor: pointer;
             backdrop-filter: blur(6px);
-            transition: transform 140ms ease, opacity 140ms ease;
+            transition:
+                transform 140ms ease,
+                opacity 140ms ease;
             z-index: 5;
         }
-        .code-copy-btn:hover { transform: translateY(-2px); }
+        .code-copy-btn:hover {
+            transform: translateY(-2px);
+        }
         .code-copy-btn.copied {
             background: #00a86b;
         }
@@ -308,8 +341,8 @@ export class AssistantView extends LitElement {
         .response-container .mermaid svg text,
         .response-container .mermaid svg .label,
         .response-container .mermaid svg .nodeLabel {
-            fill: #F5F5F5 !important;
-            color: #F5F5F5 !important;
+            fill: #f5f5f5 !important;
+            color: #f5f5f5 !important;
         }
 
         /* ── Response navigation strip ── */
@@ -408,18 +441,30 @@ export class AssistantView extends LitElement {
             border: 1px solid var(--border);
             background: var(--bg-elevated);
             color: var(--text-muted);
-            transition: border-color 0.15s, color 0.15s, background 0.15s;
+            transition:
+                border-color 0.15s,
+                color 0.15s,
+                background 0.15s;
         }
 
         /* Entrance animation so new chips are noticeable */
         .bookmark-chip {
-            animation: chip-pop 540ms cubic-bezier(.2,.8,.2,1);
+            animation: chip-pop 540ms cubic-bezier(0.2, 0.8, 0.2, 1);
         }
 
         @keyframes chip-pop {
-            0% { transform: translateY(-6px) scale(0.96); opacity: 0; }
-            60% { transform: translateY(2px) scale(1.03); opacity: 1; }
-            100% { transform: translateY(0) scale(1); opacity: 1; }
+            0% {
+                transform: translateY(-6px) scale(0.96);
+                opacity: 0;
+            }
+            60% {
+                transform: translateY(2px) scale(1.03);
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(0) scale(1);
+                opacity: 1;
+            }
         }
 
         .bookmark-chip:hover {
@@ -451,8 +496,6 @@ export class AssistantView extends LitElement {
             border-color: #34d399;
             color: #34d399;
         }
-
-
 
         /* ── Bottom input bar ── */
 
@@ -528,7 +571,9 @@ export class AssistantView extends LitElement {
             display: flex;
             align-items: center;
             gap: 4px;
-            transition: border-color var(--transition), background var(--transition);
+            transition:
+                border-color var(--transition),
+                background var(--transition);
             flex-shrink: 0;
             flex: 0 0 auto; /* ensure it doesn't grow or shrink unexpectedly */
         }
@@ -572,7 +617,9 @@ export class AssistantView extends LitElement {
             display: flex;
             align-items: center;
             gap: 4px;
-            transition: border-color 0.4s ease, background var(--transition);
+            transition:
+                border-color 0.4s ease,
+                background var(--transition);
             flex-shrink: 0;
             overflow: hidden;
             flex: 0 0 auto; /* keep button on the same row */
@@ -611,30 +658,34 @@ export class AssistantView extends LitElement {
 
         /* ── Color-coded feedback for code generation failures/corrections ── */
         .code-line {
-            color: #FFFFFF; /* White code text */
+            color: #ffffff; /* White code text */
             text-shadow: 0 0 0.6px #000000; /* thin black outline */
         }
 
         .comment-line {
-            color: rgba(255,255,255,0.7); /* light gray / semi-transparent white */
+            color: rgba(255, 255, 255, 0.7); /* light gray / semi-transparent white */
             text-shadow: 0 0 0.6px #000000;
             font-style: italic;
         }
 
         /* Corrections: neon highlights with dark shadow for visibility */
         .correction {
-            text-shadow: 0 0 6px rgba(0,0,0,0.85);
+            text-shadow: 0 0 6px rgba(0, 0, 0, 0.85);
             padding: 0 2px;
         }
 
         .correction.addition {
-            color: #00FF00; /* bright neon green */
-            box-shadow: 0 0 8px rgba(0,255,0,0.12), 0 0 2px rgba(0,0,0,0.6) inset;
+            color: #00ff00; /* bright neon green */
+            box-shadow:
+                0 0 8px rgba(0, 255, 0, 0.12),
+                0 0 2px rgba(0, 0, 0, 0.6) inset;
         }
 
         .correction.deletion {
-            color: #FF3333; /* neon red / coral */
-            box-shadow: 0 0 8px rgba(255,51,51,0.12), 0 0 2px rgba(0,0,0,0.6) inset;
+            color: #ff3333; /* neon red / coral */
+            box-shadow:
+                0 0 8px rgba(255, 51, 51, 0.12),
+                0 0 2px rgba(0, 0, 0, 0.6) inset;
         }
     `;
 
@@ -705,7 +756,12 @@ export class AssistantView extends LitElement {
                 rendered = this.wrapWordsInSpans(rendered);
                 // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
                 rendered = rendered.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
-                    const decoded = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+                    const decoded = code
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&amp;/g, '&')
+                        .replace(/&#39;/g, "'")
+                        .replace(/&quot;/g, '"');
                     const encoded = btoa(unescape(encodeURIComponent(decoded)));
                     return `<div class="mermaid" data-code="${encoded}"></div>`;
                 });
@@ -749,7 +805,9 @@ export class AssistantView extends LitElement {
     navigateToPreviousResponse() {
         if (this.currentResponseIndex > 0) {
             const prev = this.currentResponseIndex - 1;
-            try { console.log('[UI DEBUG] navigateToPreviousResponse ->', prev); } catch (e) {}
+            try {
+                console.log('[UI DEBUG] navigateToPreviousResponse ->', prev);
+            } catch (e) {}
             this.currentResponseIndex = prev;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index: this.currentResponseIndex } }));
             this.requestUpdate();
@@ -759,7 +817,9 @@ export class AssistantView extends LitElement {
     navigateToNextResponse() {
         if (this.currentResponseIndex < this.responses.length - 1) {
             const next = this.currentResponseIndex + 1;
-            try { console.log('[UI DEBUG] navigateToNextResponse ->', next); } catch (e) {}
+            try {
+                console.log('[UI DEBUG] navigateToNextResponse ->', next);
+            } catch (e) {}
             this.currentResponseIndex = next;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index: this.currentResponseIndex } }));
             this.requestUpdate();
@@ -768,7 +828,9 @@ export class AssistantView extends LitElement {
 
     navigateToResponse(index) {
         if (index >= 0 && index < this.responses.length) {
-            try { console.log('[UI DEBUG] navigateToResponse ->', index); } catch (e) {}
+            try {
+                console.log('[UI DEBUG] navigateToResponse ->', index);
+            } catch (e) {}
             this.currentResponseIndex = index;
             this.dispatchEvent(new CustomEvent('response-index-changed', { detail: { index } }));
             this.requestUpdate();
@@ -839,7 +901,7 @@ export class AssistantView extends LitElement {
         }
 
         // Keyboard shortcuts local to the assistant view (capture / solve)
-        this._boundKeydown = (e) => this._handleKeydownGlobal(e);
+        this._boundKeydown = e => this._handleKeydownGlobal(e);
         window.addEventListener('keydown', this._boundKeydown);
     }
 
@@ -1009,7 +1071,7 @@ export class AssistantView extends LitElement {
         const perimeter = 2 * straightLen + 2 * arcLen;
 
         // Given a distance along the perimeter, return {x, y, nx, ny} (position + inward normal)
-        const pointOnPerimeter = (d) => {
+        const pointOnPerimeter = d => {
             d = ((d % perimeter) + perimeter) % perimeter;
             // Top straight: left to right
             if (d < straightLen) {
@@ -1048,7 +1110,7 @@ export class AssistantView extends LitElement {
             seeds.push({ pos: Math.random(), drift: Math.random(), depthSeed: Math.random() });
         }
 
-        const draw = (now) => {
+        const draw = now => {
             const elapsed = (now - startTime) / 1000;
             const fade = Math.min(1, elapsed / FADE_IN);
 
@@ -1170,15 +1232,15 @@ export class AssistantView extends LitElement {
             }
 
             // Keep the view pinned to the bottom only if already near it.
-            const nearBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
+            const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
 
-            const esc = (t) => (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const esc = t => (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             container.innerHTML = this.responses
                 .map((resp, i) => {
                     // Back-compat: older entries may be bare strings (treated as answers).
-                    const role = (resp && typeof resp === 'object') ? resp.role : 'answer';
-                    const text = (resp && typeof resp === 'object') ? resp.text : resp;
-                    const isError = (resp && typeof resp === 'object') ? !!resp.isError : false;
+                    const role = resp && typeof resp === 'object' ? resp.role : 'answer';
+                    const text = resp && typeof resp === 'object' ? resp.text : resp;
+                    const isError = resp && typeof resp === 'object' ? !!resp.isError : false;
                     if (role === 'question') {
                         return `<div class="chat-row left"><div class="chat-msg question" data-idx="${i}">${esc(text)}</div></div>`;
                     }
@@ -1198,14 +1260,14 @@ export class AssistantView extends LitElement {
                 const { ipcRenderer } = window.require('electron');
                 // Strip markdown so teleprompter shows clean readable text
                 const plainText = currentResponse
-                    .replace(/```[\s\S]*?```/g, '')       // remove code blocks
-                    .replace(/`[^`]+`/g, '')              // inline code
-                    .replace(/#{1,6}\s+/g, '')            // headings
-                    .replace(/\*\*(.+?)\*\*/g, '$1')      // bold
-                    .replace(/\*(.+?)\*/g, '$1')          // italic
-                    .replace(/\[(.+?)\]\(.+?\)/g, '$1')   // links
-                    .replace(/^\s*[-*+]\s+/gm, '')        // bullet points
-                    .replace(/^\s*\d+\.\s+/gm, '')        // numbered lists
+                    .replace(/```[\s\S]*?```/g, '') // remove code blocks
+                    .replace(/`[^`]+`/g, '') // inline code
+                    .replace(/#{1,6}\s+/g, '') // headings
+                    .replace(/\*\*(.+?)\*\*/g, '$1') // bold
+                    .replace(/\*(.+?)\*/g, '$1') // italic
+                    .replace(/\[(.+?)\]\(.+?\)/g, '$1') // links
+                    .replace(/^\s*[-*+]\s+/gm, '') // bullet points
+                    .replace(/^\s*\d+\.\s+/gm, '') // numbered lists
                     .trim();
                 ipcRenderer.send('teleprompter-update', plainText);
             }
@@ -1222,13 +1284,17 @@ export class AssistantView extends LitElement {
                         if (!encoded) continue;
                         const raw = decodeURIComponent(escape(atob(encoded)));
                         const code = raw
-                            .replace(/```\s*"?\s*$/, '').trim()
-                            .split('\n').map(line =>
-                                line.replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`)
+                            .replace(/```\s*"?\s*$/, '')
+                            .trim()
+                            .split('\n')
+                            .map(line =>
+                                line
+                                    .replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`)
                                     .replace(/\("(.+)"\)/g, (_, l) => `("${l.replace(/"/g, '')}")`)
                                     .replace(/\[([^\]"]*[\/\(\)][^\]"]*)\]/g, (_, l) => `["${l}"]`)
                                     .replace(/^(\s*participant\s+)([^"\n]*[\/\(\)\.][^"\n]*)$/g, (_, p, name) => `${p}"${name.trim()}"`)
-                            ).join('\n');
+                            )
+                            .join('\n');
                         try {
                             const id = 'mermaid-svg-' + i + '-' + Date.now();
                             const { svg } = await window.mermaid.render(id, code);
@@ -1306,7 +1372,9 @@ export class AssistantView extends LitElement {
         } catch (e) {
             console.warn('Copy failed:', e);
             btn.textContent = 'Error';
-            setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+            setTimeout(() => {
+                btn.textContent = 'Copy';
+            }, 1200);
         }
     }
 
@@ -1316,15 +1384,26 @@ export class AssistantView extends LitElement {
         return html`
             <div class="response-container" id="responseContainer"></div>
 
-            ${!this.sessionActive ? html`
-            <div class="start-banner">
-                <span class="start-banner-text">Session not started.</span>
-                <button class="start-inline-btn" @click=${() => this.onStart && this.onStart()}>▶ Start</button>
-                <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"/><circle cx="12" cy="12" r="3"/></g></svg>
-                </button>
-            </div>
-            ` : ''}
+            ${
+                !this.sessionActive
+                    ? html`
+                          <div class="start-banner">
+                              <span class="start-banner-text">Session not started.</span>
+                              <button class="start-inline-btn" @click=${() => this.onStart && this.onStart()}>▶ Start</button>
+                              <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                                      <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                                          <path
+                                              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"
+                                          />
+                                          <circle cx="12" cy="12" r="3" />
+                                      </g>
+                                  </svg>
+                              </button>
+                          </div>
+                      `
+                    : ''
+            }
 
             <div class="input-bar">
                 <div class="input-bar-inner">
@@ -1336,43 +1415,83 @@ export class AssistantView extends LitElement {
                         @keydown=${this.handleTextKeydown}
                     />
                     <button class="send-btn" @click=${this.handleSendText} ?disabled=${!this.sessionActive} title="Send (Enter)">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <line x1="22" y1="2" x2="11" y2="13" />
+                            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                        </svg>
                     </button>
                 </div>
                 <div class="controls-row">
-                    ${!this.sessionActive ? '' : html`
-                        <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
-                            ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
-                        </select>
-                        <button
-                            class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
-                            @click=${this.handleCaptureScreenshot}
-                            title="Add screen (${this._modLabel()}+Shift+Enter) — stack multiple screens for a long question, then Analyze/Solve"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/>
-                                <circle cx="12" cy="13" r="3"/>
-                            </svg>
-                            Add screen
-                            ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
-                        </button>
-                        <button
-                            class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
-                            @click=${this.handleScreenAnswer}
-                            title="${this.capturedCount > 0 ? `Solve ${this.capturedCount} captured screen(s)` : 'Analyze the current screen'} (${this._modLabel()}+Enter)"
-                        >
-                            <canvas class="analyze-canvas"></canvas>
-                            <span class="analyze-btn-content">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-                                    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 3v7h6l-8 11v-7H5z" />
-                                </svg>
-                                ${this.capturedCount > 0 ? `Solve (${this.capturedCount})` : 'Analyze Screen'}
-                            </span>
-                        </button>
-                        <span class="controls-spacer"></span>
-                    `}
+                    ${
+                        !this.sessionActive
+                            ? ''
+                            : html`
+                                  <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
+                                      ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
+                                  </select>
+                                  <button
+                                      class="capture-btn ${this.capturedCount > 0 ? 'has-captures' : ''}"
+                                      @click=${this.handleCaptureScreenshot}
+                                      title="Add screen (${this._modLabel()}+Shift+Enter) — stack multiple screens for a long question, then Analyze/Solve"
+                                  >
+                                      <svg
+                                          xmlns="http://www.w3.org/2000/svg"
+                                          width="14"
+                                          height="14"
+                                          viewBox="0 0 24 24"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="2"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                      >
+                                          <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z" />
+                                          <circle cx="12" cy="13" r="3" />
+                                      </svg>
+                                      Add screen ${this.capturedCount > 0 ? html`<span class="capture-count">${this.capturedCount}</span>` : ''}
+                                  </button>
+                                  <button
+                                      class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
+                                      @click=${this.handleScreenAnswer}
+                                      title="${this.capturedCount > 0 ? `Solve ${this.capturedCount} captured screen(s)` : 'Analyze the current screen'} (${this._modLabel()}+Enter)"
+                                  >
+                                      <canvas class="analyze-canvas"></canvas>
+                                      <span class="analyze-btn-content">
+                                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+                                              <path
+                                                  fill="none"
+                                                  stroke="currentColor"
+                                                  stroke-linecap="round"
+                                                  stroke-linejoin="round"
+                                                  stroke-width="2"
+                                                  d="M13 3v7h6l-8 11v-7H5z"
+                                              />
+                                          </svg>
+                                          ${this.capturedCount > 0 ? `Solve (${this.capturedCount})` : 'Analyze Screen'}
+                                      </span>
+                                  </button>
+                                  <span class="controls-spacer"></span>
+                              `
+                    }
                     <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"/><circle cx="12" cy="12" r="3"/></g></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+                            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+                                <path
+                                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37c1 .608 2.296.07 2.572-1.065"
+                                />
+                                <circle cx="12" cy="12" r="3" />
+                            </g>
+                        </svg>
                     </button>
                 </div>
             </div>

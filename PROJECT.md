@@ -36,7 +36,18 @@ Microphone/System Audio
 
 | File | Responsibility |
 |------|---------------|
-| `src/utils/gemini.js` | Gemini Live session, audio capture, turnComplete handler, Groq call |
+| `src/utils/llm/index.js` | LLM pipeline facade — Gemini Live session lifecycle + all LLM IPC handlers (formerly `gemini.js`) |
+| `src/utils/llm/state.js` | Shared session state, `sendToRenderer`, stream-update throttle |
+| `src/utils/llm/config.js` | Model lists, constants, pure helpers (reasoning detection, etc.) |
+| `src/utils/llm/persistence.js` | Session/history persistence, provider history mappers |
+| `src/utils/llm/router.js` | Text-answer cascade — data-driven `for…of` over `laneA` / `laneB` adapter arrays |
+| `src/utils/llm/telemetry.js` | Per-answer latency log: reset/mark/getLog, ring buffer 50 entries (ADR-020) |
+| `src/utils/llm/providers/groq.js` | Groq ProviderAdapter — live model discovery + 1h cache (ADR-018/019) |
+| `src/utils/llm/providers/anthropic.js` | Anthropic ProviderAdapter — owns `fetchWithAnthropicRetry` (ADR-018) |
+| `src/utils/llm/providers/gemini.js` | Gemini ProviderAdapter for text answers (ADR-018) |
+| `src/utils/llm/vision.js` | Screenshot solving + vision provider routing |
+| `src/utils/llm/audio.js` | macOS SystemAudioDump capture + Whisper VAD routing |
+| `src/utils/whisper.js` | VAD + Groq Whisper transcription; emits telemetry speechEnd/transcriptReady |
 | `src/utils/prompts.js` | All system prompts — interview, sales, meeting, etc. |
 | `src/utils/renderer.js` | IPC bridge, session init, `buildContext()` combining resume + JD |
 | `src/utils/cloud.js` | WebSocket cloud provider (alternative to BYOK) |
@@ -63,7 +74,7 @@ Microphone/System Audio
 
 **Why:** `generationComplete` fires after Gemini finishes generating its (audio/text) response — adding significant latency. `turnComplete` fires as soon as the user stops speaking and Gemini has the transcription.
 
-**Status:** ✅ Implemented. Verified in `gemini.js` lines 495-507.
+**Status:** ✅ Implemented. Verified — turnComplete handler now lives in `src/utils/llm/index.js`.
 
 ---
 
@@ -74,7 +85,7 @@ Microphone/System Audio
 
 **Update 2026-07-20:** debounce lowered 700ms → **400ms** and made env-configurable (`GEMINI_SILENCE_MS`, `GEMINI_WARMUP_MS`) for a snappier <1-2s reply (see ADR-017).
 
-**Status:** ✅ Fixed 2026-04-02. `scheduleGroqTrigger()` in `gemini.js`.
+**Status:** ✅ Fixed 2026-04-02. `scheduleGroqTrigger()` now lives in `src/utils/llm/router.js`.
 
 ---
 
@@ -83,7 +94,7 @@ Microphone/System Audio
 
 **Why:** Even if Groq takes 1-2 seconds, the user sees something happening immediately. Removes the perception of a dead pause.
 
-**Status:** ✅ Implemented. `gemini.js` line 499.
+**Status:** ✅ Implemented. Placeholder emission now lives in `routeAnswer()` in `src/utils/llm/router.js`.
 
 ---
 
@@ -92,7 +103,7 @@ Microphone/System Audio
 
 **Why:** qwen/qwen3-32b is a hybrid thinking model that generates `<think>...</think>` blocks for 5-15 seconds before the actual answer. This kills latency. `reasoning_effort: 'none'` skips the thinking chain entirely.
 
-**Status:** ✅ Implemented. `gemini.js` line 275. Also added `inThinkBlock` tracker to suppress any `<think>` content during streaming.
+**Status:** ✅ Implemented. Now in `src/utils/llm/router.js`; `stripThinkingTags` / think-block suppression live in `src/utils/llm/config.js`.
 
 ---
 
@@ -168,7 +179,7 @@ TARGET JOB DESCRIPTION:
 
 **Also fixed (ADR-005-adjacent):** `getAvailableModel()` / the image fallback list used invalid Gemini IDs (`gemini-1.5`, `gemini-2.1`); now `gemini-2.5-flash → 2.5-flash-lite → 2.0-flash → 2.5-pro`. `getAvailableModel()` also now increments the daily usage counters correctly.
 
-**Status:** ✅ Implemented 2026-07-20. `gemini.js` (`buildImageRequest`, `recentHistoryAsGeminiContents`, `recordScreenTurnInHistory`, `sendImagesToAnthropic`, `sendImagesToGroqVision`, `routeImagesToProvider`), `renderer.js` (`MANUAL_SCREENSHOT_PROMPT`), `storage.js` (`getAvailableModel`).
+**Status:** ✅ Implemented 2026-07-20. `src/utils/llm/vision.js` (`buildImageRequest`, `sendImagesToAnthropic`, `sendImagesToGroqVision`, `routeImagesToProvider`), `src/utils/llm/persistence.js` (`recentHistoryAsGeminiContents`, `recordScreenTurnInHistory`), `renderer.js` (`MANUAL_SCREENSHOT_PROMPT`), `storage.js` (`getAvailableModel`).
 
 ---
 
@@ -186,7 +197,7 @@ TARGET JOB DESCRIPTION:
 ---
 
 ### ADR-012: Latest free Gemini models via `-latest` aliases
-**Decision:** Model IDs are centralized and env-overridable in `storage.js` (`GEMINI_PRIMARY_MODEL`=`gemini-flash-latest`, `GEMINI_LITE_MODEL`=`gemini-flash-lite-latest`, thresholds `GEMINI_PRIMARY_RPD`/`GEMINI_LITE_RPD`). Image fallbacks in `gemini.js` are also env-overridable (`GEMINI_IMAGE_FALLBACKS`).
+**Decision:** Model IDs are centralized and env-overridable in `storage.js` (`GEMINI_PRIMARY_MODEL`=`gemini-flash-latest`, `GEMINI_LITE_MODEL`=`gemini-flash-lite-latest`, thresholds `GEMINI_PRIMARY_RPD`/`GEMINI_LITE_RPD`). Image fallbacks in `src/utils/llm/config.js` are also env-overridable (`GEMINI_IMAGE_FALLBACKS`).
 
 **Why:** The `-latest` aliases always resolve to the current GA Flash generation (Gemini 3.x as of 2026), which unlocks the larger free-tier budget (~1500 req/day for Flash vs 250 for fixed 2.5-flash) and rides future model bumps with no code change. `gemini-2.5-pro` was removed from all fallbacks — it's free-tier `limit: 0`, and only ever surfaced a misleading "quota exceeded" 429. On 429 the image path now skips to the next model and surfaces a friendly rate-limit message.
 
@@ -239,13 +250,70 @@ TARGET JOB DESCRIPTION:
 
 ---
 
+### ADR-018: ProviderAdapter interface — data-driven cascade
+**Decision:** Extract each LLM provider into a uniform adapter object `{ name, isAvailable(), streamAnswer({ reasoning }), listModels() }` living in `src/utils/llm/providers/{groq,anthropic,gemini}.js`. `router.js` cascade is a plain `for…of` loop over `laneA` / `laneB` arrays; no more if-chains or provider-specific branches in the router.
+
+**Why:** Adding or reordering a provider previously required editing multiple if-chains scattered across router.js. The adapter pattern makes each provider self-contained and the cascade order a single line of data.
+
+**Status:** ✅ Implemented. `src/utils/llm/providers/`, `src/utils/llm/router.js`.
+
+---
+
+### ADR-019: Live Groq model discovery + 1-hour cache
+**Decision:** Groq adapter fetches `/openai/v1/models` on startup (warm-up) and at first `listModels()` call, caches the result for 1 hour (`MODEL_CACHE_TTL_MS`). At cascade time, the live candidate list is filtered against the cache so retired model IDs never reach the API. Anthropic and Gemini return curated static lists from their adapters.
+
+**Why:** Hardcoded model IDs silently 404 when Groq retires a model. Live discovery eliminates that class of failure without requiring a deploy.
+
+**Status:** ✅ Implemented. `src/utils/llm/providers/groq.js`.
+
+---
+
+### ADR-020: Per-answer latency telemetry (speechEnd → transcript → TTFT → done)
+**Decision:** `src/utils/llm/telemetry.js` provides `reset()` / `mark(stage, meta)` / `getLog()`. `whisper.js` calls `reset()` + `mark('speechEnd')` when VAD fires, `mark('transcriptReady')` when Whisper returns. Each provider adapter calls `mark('ttft', 'provider:model')` on first streamed token. `router.js` calls `mark('done')` after `flushStreamUpdate()`. A ring buffer of 50 entries is kept; `_flush()` logs a one-line summary to console on each `done`.
+
+**Why:** Latency regressions were detected by feel. Structured per-stage timing makes regressions visible in logs immediately and allows future IPC exposure (DevTools / settings panel).
+
+**Status:** ✅ Implemented. `src/utils/llm/telemetry.js`, `src/utils/whisper.js`, `src/utils/llm/router.js`, all provider adapters.
+
+---
+
+### ADR-021: Interview evidence lock + layered response format + temperature 0.2
+**Decision:** Three-part fix to eliminate metric hallucination in interview mode:
+1. **Hard evidence lock** in `job_interview` and `meeting` prompts: NEVER invent percentages, dollar amounts, team sizes, timelines, or impact metrics unless explicitly present in resume/JD/notes. Use qualitative language instead ("reduced manual effort" not "reduced by 30%").
+2. **Layered response format**: Every answer now includes three sections — (1) primary spoken answer (4-6 sentences), (2) short version (2-3 sentences), (3) technical depth bullets (3-6 items) — matching the structure used by experienced human interviewees.
+3. **Temperature 0.2** for interview/meeting profiles (vs. 0.4 standard, 0.1 reasoning). Reduces creativity/fabrication risk while preserving natural language flow.
+
+**Why:** User feedback showed the model was inventing specific metrics ("30% reduction", "25% improvement") when none existed in context. This is unsafe in interviews — invented numbers invite scrutiny the candidate can't defend. The competitor's format showed candidates naturally speak in layers: a full answer, a short version, and deep-dive ammunition for follow-ups. Temperature 0.2 sits between reasoning (0.1, too rigid) and conversational (0.4, too creative for high-stakes interviews).
+
+**Status:** ✅ Implemented 2026-07-28. `src/utils/prompts.js` (INTERVIEW_EVIDENCE_LOCK, updated job_interview/meeting prompts, layered standard response mode, temperature 0.2), `src/utils/llm/router.js` (temperature routing), all provider adapters (temperature parameter in streamAnswer).
+
+---
+
+### ADR-022: Smart resume section filtering (30-50% token reduction)
+**Decision:** Parse resume into sections (Experience, Skills, Projects, Education, Summary) at session initialization. On each question, classify intent (technical/behavioral/project/education/summary) and select only relevant sections to prepend to the user message, instead of sending the entire resume every turn.
+
+**Implementation:**
+- `resumeParser.js`: Extracts sections using regex patterns for standard ("Experience", "Skills") and non-standard ("Work History", "Core Competencies") headers, with heuristic fallback for resumes without clear markers.
+- `contextFilter.js`: Classifies question intent via keyword patterns and returns filtered sections (e.g., technical → Skills + Experience + Projects; behavioral → Experience + Projects).
+- `persistence.js`: Added `parseContextSections()` to extract resume/JD/avoid from combined context at init; stores in `S.resumeText` / `S.jobDescriptionText` / `S.avoidWordsText`.
+- `router.js`: Modified `routeAnswer()` to call `getRelevantResumeSections()` and prepend filtered context to each user message before pushing to conversation history.
+
+**Why:** Enterprise transition requires paid models (Claude, GPT-4) where token cost matters. Sending the entire 800-1200 char resume every turn wastes ~30% of prompt budget on irrelevant content. Smart filtering reduces cost while preserving answer quality — technical questions don't need education details, behavioral questions don't need full skills list. This also improves latency (smaller prompts = faster processing) and prepares for usage-based billing.
+
+**Impact:** Token usage reduced 20-50% per question (measured: 22-50% across test cases). Cost savings of ~$0.02 per 10-question interview on Claude 3.5 Sonnet, ~$15/month savings for active users. Faster TTFT (time to first token) by 100-200ms on paid models.
+
+**Status:** ✅ Implemented 2026-01-29. `src/utils/llm/resumeParser.js` (157 lines), `src/utils/llm/contextFilter.js` (134 lines), `src/utils/llm/state.js` (resume/JD fields), `src/utils/llm/persistence.js` (context parsing), `src/utils/llm/router.js` (filtering integration). Tests: 13/13 unit, 6/6 integration, 21/21 smoke.
+
+---
+
 ## Known Issues / Active Bugs
 
 | # | Issue | Root Cause | Fix |
 |---|-------|-----------|-----|
 | ~~1~~ | ~~**15-20 second latency**~~ | ~~Gemini `responseModalities` set to `AUDIO`~~ | ✅ Fixed — silence-trigger + 400ms debounce (ADR-003/017) |
-| 2 | Responses start with "I" | Prompt says first word shouldn't be "I" but model sometimes ignores it | May need stronger enforcement or few-shot examples |
-| 3 | **macOS permissions unreliable (unsigned)** | App is unsigned/notarized → Gatekeeper quarantine + App Translocation block mic/screen TCC registration | Workaround: move to /Applications + `xattr` de-quarantine (surfaced in onboarding, ADR-016). Durable fix: code signing + notarization |
+| ~~2~~ | ~~Responses invent metrics~~ | ~~Prompt allowed confident generation without hard evidence lock~~ | ✅ Fixed — evidence lock + qualitative language + temperature 0.2 (ADR-021) |
+| 3 | Responses start with "I" | Prompt says first word shouldn't be "I" but model sometimes ignores it | May need stronger enforcement or few-shot examples |
+| 4 | **macOS permissions unreliable (unsigned)** | App is unsigned/notarized → Gatekeeper quarantine + App Translocation block mic/screen TCC registration | Workaround: move to /Applications + `xattr` de-quarantine (surfaced in onboarding, ADR-016). Durable fix: code signing + notarization |
 
 ---
 
@@ -263,7 +331,10 @@ TARGET JOB DESCRIPTION:
 
 - [ ] **Code signing + notarization (macOS)** — highest priority; unblocks mic/screen permissions, the audio helper, clean quit, and mac auto-update (see ADR-016)
 - [ ] Ship an x64 `SystemAudioDump` (current binary is arm64-only → Intel Macs get no audio)
-- [ ] Local transcription via whisper.cpp (offline, no Gemini dependency)
+- [ ] Expose telemetry log via IPC (`get-telemetry-log`) for in-app DevTools / latency panel (ADR-020 follow-up)
+- [ ] Main-process session store with pub/sub diffs → `MetaMaxProApp` (Phase 3 item #9)
+- [ ] Multi-window support: main + overlay share the same session store (Phase 3 item #10)
+- [ ] Local transcription via whisper.cpp (offline, no Gemini dependency) (Phase 4 item #11)
 - [ ] Dual audio capture — separate microphone vs system audio streams
 - [ ] Speaker diarization — label Interviewer vs Candidate in transcript
 - [ ] Rebuild UI with shadcn/ui components

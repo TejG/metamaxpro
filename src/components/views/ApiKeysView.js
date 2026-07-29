@@ -36,7 +36,9 @@ export class ApiKeysView extends LitElement {
                 align-self: flex-start;
                 font-family: var(--font);
             }
-            .link-hint:hover { opacity: 0.8; }
+            .link-hint:hover {
+                opacity: 0.8;
+            }
             .control {
                 background: var(--bg-elevated);
                 border: 1px solid var(--border);
@@ -47,22 +49,33 @@ export class ApiKeysView extends LitElement {
                 font-family: var(--font);
                 outline: none;
             }
-            .control:focus { border-color: var(--accent); }
+            .control:focus {
+                border-color: var(--accent);
+            }
             .key-row {
                 display: flex;
                 align-items: center;
                 gap: 10px;
             }
-            .key-row .control { flex: 1; min-width: 0; }
+            .key-row .control {
+                flex: 1;
+                min-width: 0;
+            }
             .key-status {
                 font-size: 12px;
                 white-space: nowrap;
                 min-width: 66px;
                 text-align: right;
             }
-            .key-status.checking { color: var(--text-muted); }
-            .key-status.ok { color: #2e9e5b; }
-            .key-status.err { color: #e5484d; }
+            .key-status.checking {
+                color: var(--text-muted);
+            }
+            .key-status.ok {
+                color: #2e9e5b;
+            }
+            .key-status.err {
+                color: #e5484d;
+            }
             .saved {
                 font-size: 11px;
                 color: #2e9e5b;
@@ -123,19 +136,26 @@ export class ApiKeysView extends LitElement {
     }
 
     async _validateGemini(key) {
-        if (!key || !key.trim()) { this._geminiStatus = 'idle'; return; }
+        if (!key || !key.trim()) {
+            this._geminiStatus = 'idle';
+            return;
+        }
         this._geminiStatus = 'checking';
         try {
-            const res = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models?key=${key.trim()}&pageSize=1`,
-                { signal: AbortSignal.timeout(8000) }
-            );
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key.trim()}&pageSize=1`, {
+                signal: AbortSignal.timeout(8000),
+            });
             this._geminiStatus = res.ok ? 'ok' : 'error';
-        } catch { this._geminiStatus = 'error'; }
+        } catch {
+            this._geminiStatus = 'error';
+        }
     }
 
     async _validateGroq(key) {
-        if (!key || !key.trim()) { this._groqStatus = 'idle'; return; }
+        if (!key || !key.trim()) {
+            this._groqStatus = 'idle';
+            return;
+        }
         this._groqStatus = 'checking';
         try {
             const res = await fetch('https://api.groq.com/openai/v1/models', {
@@ -143,11 +163,16 @@ export class ApiKeysView extends LitElement {
                 signal: AbortSignal.timeout(8000),
             });
             this._groqStatus = res.ok ? 'ok' : 'error';
-        } catch { this._groqStatus = 'error'; }
+        } catch {
+            this._groqStatus = 'error';
+        }
     }
 
     async _validateAnthropic(key) {
-        if (!key || !key.trim()) { this._anthropicStatus = 'idle'; return; }
+        if (!key || !key.trim()) {
+            this._anthropicStatus = 'idle';
+            return;
+        }
         this._anthropicStatus = 'checking';
         try {
             const res = await fetch('https://api.anthropic.com/v1/models', {
@@ -156,13 +181,17 @@ export class ApiKeysView extends LitElement {
                 signal: AbortSignal.timeout(10000),
             });
             this._anthropicStatus = res.status === 200 ? 'ok' : 'error';
-        } catch { this._anthropicStatus = 'error'; }
+        } catch {
+            this._anthropicStatus = 'error';
+        }
     }
 
     _flash() {
         this._savedNote = 'Saved';
         clearTimeout(this._noteTimer);
-        this._noteTimer = setTimeout(() => { this._savedNote = ''; }, 1500);
+        this._noteTimer = setTimeout(() => {
+            this._savedNote = '';
+        }, 1500);
     }
 
     _openLink(url) {
@@ -209,7 +238,13 @@ export class ApiKeysView extends LitElement {
                 <div class="field">
                     <label>Gemini API key</label>
                     <div class="key-row">
-                        <input class="control" type="password" .value=${this._gemini} @change=${this._saveGemini} placeholder="Live transcription + screen solving" />
+                        <input
+                            class="control"
+                            type="password"
+                            .value=${this._gemini}
+                            @change=${this._saveGemini}
+                            placeholder="Live transcription + screen solving"
+                        />
                         ${this._renderStatus(this._geminiStatus)}
                     </div>
                     <button class="link-hint" @click=${() => this._openLink('https://aistudio.google.com/apikey')}>Get a Gemini key ↗</button>
@@ -225,10 +260,18 @@ export class ApiKeysView extends LitElement {
                 <div class="field">
                     <label>Anthropic API key <span class="hint">(optional)</span></label>
                     <div class="key-row">
-                        <input class="control" type="password" .value=${this._anthropic} @change=${this._saveAnthropic} placeholder="Optional — used for screen solving" />
+                        <input
+                            class="control"
+                            type="password"
+                            .value=${this._anthropic}
+                            @change=${this._saveAnthropic}
+                            placeholder="Optional — used for screen solving"
+                        />
                         ${this._renderStatus(this._anthropicStatus)}
                     </div>
-                    <button class="link-hint" @click=${() => this._openLink('https://console.anthropic.com/settings/keys')}>Get an Anthropic key ↗</button>
+                    <button class="link-hint" @click=${() => this._openLink('https://console.anthropic.com/settings/keys')}>
+                        Get an Anthropic key ↗
+                    </button>
                 </div>
             </div>
         `;

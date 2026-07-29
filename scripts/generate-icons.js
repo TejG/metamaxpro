@@ -37,7 +37,10 @@ async function buildBasePng() {
 }
 
 async function resizePng(buf, size) {
-    return sharp(buf).resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+    return sharp(buf)
+        .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .png()
+        .toBuffer();
 }
 
 async function main() {
@@ -66,11 +69,16 @@ async function main() {
         const iconset = path.join(tmp, 'logo.iconset');
         fs.mkdirSync(iconset);
         const icnsSpec = [
-            [16, 'icon_16x16.png'], [32, 'icon_16x16@2x.png'],
-            [32, 'icon_32x32.png'], [64, 'icon_32x32@2x.png'],
-            [128, 'icon_128x128.png'], [256, 'icon_128x128@2x.png'],
-            [256, 'icon_256x256.png'], [512, 'icon_256x256@2x.png'],
-            [512, 'icon_512x512.png'], [1024, 'icon_512x512@2x.png'],
+            [16, 'icon_16x16.png'],
+            [32, 'icon_16x16@2x.png'],
+            [32, 'icon_32x32.png'],
+            [64, 'icon_32x32@2x.png'],
+            [128, 'icon_128x128.png'],
+            [256, 'icon_128x128@2x.png'],
+            [256, 'icon_256x256.png'],
+            [512, 'icon_256x256@2x.png'],
+            [512, 'icon_512x512.png'],
+            [1024, 'icon_512x512@2x.png'],
         ];
         for (const [size, name] of icnsSpec) {
             fs.writeFileSync(path.join(iconset, name), await resizePng(base, size));
@@ -85,4 +93,7 @@ async function main() {
     console.log('Done. App icons regenerated from the mascot.');
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

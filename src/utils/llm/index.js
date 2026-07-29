@@ -1,60 +1,27 @@
-// gemini.js — Gemini Live session management, IPC handlers, and the public
-// facade for the LLM pipeline.
+// llm/index.js — public facade for the LLM pipeline.
 //
-// This file was previously a 2,800-line god module. The behavior now lives in
-// focused modules under ./llm/ — this file owns only what is genuinely
-// Gemini-Live/IPC specific and re-exports the rest so existing consumers
-// (index.js, localai.js) keep working unchanged:
+// Owns the Gemini Live session lifecycle and all LLM-related IPC handlers,
+// and re-exports the pipeline so consumers (src/index.js, localai.js) have a
+// single entry point. Everything else lives in focused modules:
 //
-//   llm/state.js        shared mutable session state + sendToRenderer
-//   llm/config.js       model lists, constants, pure helpers
-//   llm/persistence.js  session/history persistence + provider history mappers
-//   llm/router.js       text-answer cascade (Anthropic → Groq → Gemini)
-//   llm/vision.js       screenshot solving + provider routing
-//   llm/audio.js        macOS SystemAudioDump capture
-//
-// (The legacy dead functions sendToGroq / sendToGemma / looksLikeFollowUpFix /
-// extractLastAssistantCode — superseded by routeAnswer — were dropped in this
-// refactor; nothing referenced them.)
+//   state.js        shared mutable session state + sendToRenderer
+//   config.js       model lists, constants, pure helpers
+//   persistence.js  session/history persistence + provider history mappers
+//   router.js       text-answer cascade (Groq / Anthropic / Gemini)
+//   vision.js       screenshot solving + provider routing
+//   audio.js        macOS SystemAudioDump capture + Whisper VAD routing
 const { GoogleGenAI, Modality } = require('@google/genai');
 const { BrowserWindow, ipcMain } = require('electron');
-const { getSystemPrompt } = require('./prompts');
-const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, setOnTurnComplete } = require('./cloud');
-const { startWhisperVAD, stopWhisperVAD } = require('./whisper');
+const { getSystemPrompt } = require('../prompts');
+const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, setOnTurnComplete } = require('../cloud');
+const { startWhisperVAD, stopWhisperVAD } = require('../whisper');
 
-const { S, sendToRenderer, getLocalAi } = require('./llm/state');
-const {
-    SESSION_WARMUP_MS,
-    MAX_RECONNECT_ATTEMPTS,
-    RECONNECT_DELAY,
-    GEMINI_LIVE_MODELS,
-    formatSpeakerResults,
-} = require('./llm/config');
-const {
-    initializeNewSession,
-    saveConversationTurn,
-    getCurrentSessionData,
-    buildContextMessage,
-} = require('./llm/persistence');
-const {
-    routeAnswer,
-    scheduleGroqTrigger,
-    cancelSilenceTimer,
-    cancelProvisionalTimer,
-    queueForAnthropic,
-} = require('./llm/router');
-const {
-    sendImageToGeminiHttp,
-    sendMultipleImagesToGeminiHttp,
-    routeImagesToProvider,
-} = require('./llm/vision');
-const {
-    killExistingSystemAudioDump,
-    startMacOSAudioCapture,
-    convertStereoToMono,
-    stopMacOSAudioCapture,
-    sendAudioToGemini,
-} = require('./llm/audio');
+const { S, sendToRenderer, getLocalAi } = require('./state');
+const { SESSION_WARMUP_MS, MAX_RECONNECT_ATTEMPTS, RECONNECT_DELAY, GEMINI_LIVE_MODELS, formatSpeakerResults } = require('./config');
+const { initializeNewSession, saveConversationTurn, getCurrentSessionData, buildContextMessage } = require('./persistence');
+const { routeAnswer, scheduleGroqTrigger, cancelSilenceTimer, cancelProvisionalTimer, queueForAnthropic } = require('./router');
+const { sendImageToGeminiHttp, sendMultipleImagesToGeminiHttp, routeImagesToProvider } = require('./vision');
+const { killExistingSystemAudioDump, startMacOSAudioCapture, convertStereoToMono, stopMacOSAudioCapture, sendAudioToGemini } = require('./audio');
 
 async function getEnabledTools() {
     const tools = [];
@@ -230,7 +197,12 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     if (!session) {
         const msg = (lastErr && (lastErr.message || String(lastErr))) || 'unknown error';
         console.error('[Gemini] All live audio models failed to connect:', msg);
-        sendToRenderer('update-status', '⚠️ Live audio session could not start — audio answers are unavailable (' + msg + '). Screenshots still work; check your Gemini API key/quota.');
+        sendToRenderer(
+            'update-status',
+            '⚠️ Live audio session could not start — audio answers are unavailable (' +
+                msg +
+                '). Screenshots still work; check your Gemini API key/quota.'
+        );
         return null;
     }
     return session;
@@ -348,7 +320,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             try {
                 S.isUserClosing = true;
                 geminiSessionRef.current.close();
-            } catch (_) { /* already closed */ }
+            } catch (_) {
+                /* already closed */
+            }
             geminiSessionRef.current = null;
         }
         S.sessionParams = null; // disable Gemini auto-reconnect

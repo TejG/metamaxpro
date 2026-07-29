@@ -128,7 +128,9 @@ export class OnboardingView extends LitElement {
             font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: opacity 0.15s, filter 0.15s;
+            transition:
+                opacity 0.15s,
+                filter 0.15s;
         }
 
         .btn-primary:hover {
@@ -179,7 +181,9 @@ export class OnboardingView extends LitElement {
             height: 7px;
             border-radius: 50%;
             background: rgba(255, 255, 255, 0.15);
-            transition: background 0.2s, width 0.2s;
+            transition:
+                background 0.2s,
+                width 0.2s;
         }
 
         .dot.active {
@@ -254,7 +258,10 @@ export class OnboardingView extends LitElement {
             font-size: 19px;
         }
 
-        .card-body { flex: 1 1 auto; min-width: 0; }
+        .card-body {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
 
         .card-title {
             font-size: 14px;
@@ -281,10 +288,20 @@ export class OnboardingView extends LitElement {
             letter-spacing: 0.03em;
         }
 
-        .status-pill.granted { background: rgba(34, 160, 90, 0.2); color: #4fd88b; }
-        .status-pill.needed { background: rgba(210, 150, 40, 0.18); color: #e0a94a; }
+        .status-pill.granted {
+            background: rgba(34, 160, 90, 0.2);
+            color: #4fd88b;
+        }
+        .status-pill.needed {
+            background: rgba(210, 150, 40, 0.18);
+            color: #e0a94a;
+        }
 
-        .card-actions { flex: 0 0 auto; display: flex; gap: 6px; }
+        .card-actions {
+            flex: 0 0 auto;
+            display: flex;
+            gap: 6px;
+        }
 
         .btn-ghost {
             background: rgba(255, 255, 255, 0.08);
@@ -299,7 +316,9 @@ export class OnboardingView extends LitElement {
             transition: background 0.15s;
         }
 
-        .btn-ghost:hover { background: rgba(255, 255, 255, 0.16); }
+        .btn-ghost:hover {
+            background: rgba(255, 255, 255, 0.16);
+        }
 
         /* Shortcut rows */
         .shortcut-row {
@@ -313,10 +332,22 @@ export class OnboardingView extends LitElement {
             background: rgba(255, 255, 255, 0.03);
         }
 
-        .shortcut-label { font-size: 14px; font-weight: 600; }
-        .shortcut-sub { font-size: 12px; color: #9a9aa2; margin-top: 3px; }
+        .shortcut-label {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .shortcut-sub {
+            font-size: 12px;
+            color: #9a9aa2;
+            margin-top: 3px;
+        }
 
-        .keys { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+        .keys {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex: 0 0 auto;
+        }
 
         .key {
             min-width: 28px;
@@ -347,7 +378,11 @@ export class OnboardingView extends LitElement {
             background: #4f8cf5;
         }
 
-        .feature-text { font-size: 13px; line-height: 1.5; color: #c8c8ce; }
+        .feature-text {
+            font-size: 13px;
+            line-height: 1.5;
+            color: #c8c8ce;
+        }
 
         .context-input {
             width: 100%;
@@ -363,8 +398,13 @@ export class OnboardingView extends LitElement {
             resize: vertical;
         }
 
-        .context-input::placeholder { color: #6c6c74; }
-        .context-input:focus { outline: none; border-color: rgba(79, 140, 245, 0.6); }
+        .context-input::placeholder {
+            color: #6c6c74;
+        }
+        .context-input:focus {
+            outline: none;
+            border-color: rgba(79, 140, 245, 0.6);
+        }
 
         .help-note {
             margin-top: 6px;
@@ -374,8 +414,17 @@ export class OnboardingView extends LitElement {
             background: rgba(255, 255, 255, 0.02);
         }
 
-        .help-title { font-size: 12px; font-weight: 600; color: #d8d8de; }
-        .help-desc { font-size: 11px; line-height: 1.45; color: #9a9aa2; margin-top: 3px; }
+        .help-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #d8d8de;
+        }
+        .help-desc {
+            font-size: 11px;
+            line-height: 1.45;
+            color: #9a9aa2;
+            margin-top: 3px;
+        }
 
         .cmd-row {
             display: flex;
@@ -419,8 +468,8 @@ export class OnboardingView extends LitElement {
         this.onClose = () => {};
         this.gateMode = false;
         this.initialSlide = 0;
-        this.isMac = (typeof process !== 'undefined') && process.platform === 'darwin';
-        this.isWindows = (typeof process !== 'undefined') && process.platform === 'win32';
+        this.isMac = typeof process !== 'undefined' && process.platform === 'darwin';
+        this.isWindows = typeof process !== 'undefined' && process.platform === 'win32';
         this.permStatus = { platform: this.isMac ? 'darwin' : 'other', screen: 'unknown', microphone: 'unknown' };
         this._pollTimer = null;
         // On macOS Sequoia (15+), a freshly-granted Screen Recording permission
@@ -434,9 +483,9 @@ export class OnboardingView extends LitElement {
     }
 
     firstUpdated() {
-        this.currentSlide = this.gateMode ? 1 : (this.initialSlide || 0);
+        this.currentSlide = this.gateMode ? 1 : this.initialSlide || 0;
         this.refreshPermissions();
-        
+
         // If starting on or advancing to the permissions slide, request screen
         // recording permission immediately so the user sees the native prompt
         // before we start polling. This ensures the prompt appears while the
@@ -444,7 +493,7 @@ export class OnboardingView extends LitElement {
         if (this.currentSlide === 1) {
             this.requestScreenPermissionIfNeeded();
         }
-        
+
         // Keep permission status live so the gate opens right after the user
         // grants access in System Settings.
         this._pollTimer = setInterval(() => this.refreshPermissions(), 1500);
@@ -456,7 +505,11 @@ export class OnboardingView extends LitElement {
     }
 
     get _ipc() {
-        try { return require('electron').ipcRenderer; } catch (_) { return null; }
+        try {
+            return require('electron').ipcRenderer;
+        } catch (_) {
+            return null;
+        }
     }
 
     // Screen Recording is the hard gate on macOS — the app genuinely can't work
@@ -501,16 +554,20 @@ export class OnboardingView extends LitElement {
     async restartApp() {
         const ipc = this._ipc;
         if (!ipc) return;
-        try { await ipc.invoke('app:relaunch'); } catch (e) { console.error('Failed to relaunch app:', e); }
+        try {
+            await ipc.invoke('app:relaunch');
+        } catch (e) {
+            console.error('Failed to relaunch app:', e);
+        }
     }
 
     async requestScreenPermissionIfNeeded() {
         // Only request on macOS and only if we haven't already granted it
         if (!this.isMac || this.permStatus.screen === 'granted') return;
-        
+
         const ipc = this._ipc;
         if (!ipc) return;
-        
+
         try {
             console.log('[Onboarding] Requesting screen recording permission...');
             await ipc.invoke('permissions:request-screen');
@@ -539,10 +596,15 @@ export class OnboardingView extends LitElement {
     _quarantineCmd = 'xattr -dr com.apple.quarantine /Applications/MetaQuest.app';
 
     _copyQuarantineCmd() {
-        try { require('electron').clipboard.writeText(this._quarantineCmd); } catch (_) {}
+        try {
+            require('electron').clipboard.writeText(this._quarantineCmd);
+        } catch (_) {}
         this._copied = true;
         this.requestUpdate();
-        setTimeout(() => { this._copied = false; this.requestUpdate(); }, 1500);
+        setTimeout(() => {
+            this._copied = false;
+            this.requestUpdate();
+        }, 1500);
     }
 
     handleContextInput(e) {
@@ -560,12 +622,18 @@ export class OnboardingView extends LitElement {
     // Advance from the current step. In gateMode we finish as soon as the
     // required permission is granted (no need to repeat shortcuts/context).
     next() {
-        if (this.gateMode) { this.completeOnboarding(); return; }
-        if (this.currentSlide >= 3) { this.completeOnboarding(); return; }
-        
+        if (this.gateMode) {
+            this.completeOnboarding();
+            return;
+        }
+        if (this.currentSlide >= 3) {
+            this.completeOnboarding();
+            return;
+        }
+
         const nextSlide = this.currentSlide + 1;
         this.currentSlide = nextSlide;
-        
+
         // If advancing to the permissions slide, request screen recording
         // permission so the user sees the native prompt immediately.
         if (nextSlide === 1) {
@@ -589,15 +657,22 @@ export class OnboardingView extends LitElement {
     // ── Left pane copy per step ──
     _leftCopy() {
         switch (this.currentSlide) {
-            case 1: return {
-                title: this.gateMode ? 'Permission needed' : 'Enable permissions',
-                sub: this.isMac
-                    ? 'MetaQuest needs macOS permission to see your screen and hear meeting audio. Grant it on the right to continue.'
-                    : 'Allow microphone access so MetaQuest can hear your questions.',
-            };
-            case 2: return { title: 'Two shortcuts to know', sub: 'These work globally — even when MetaQuest is hidden or another window is focused.' };
-            case 3: return { title: 'Add context', sub: 'Optional. Paste your resume, a job description, or notes so answers are tailored to you.' };
-            default: return { title: 'Welcome to MetaQuest', sub: 'Your real-time AI assistant — it sees your screen, listens to meetings, and answers in context.' };
+            case 1:
+                return {
+                    title: this.gateMode ? 'Permission needed' : 'Enable permissions',
+                    sub: this.isMac
+                        ? 'MetaQuest needs macOS permission to see your screen and hear meeting audio. Grant it on the right to continue.'
+                        : 'Allow microphone access so MetaQuest can hear your questions.',
+                };
+            case 2:
+                return { title: 'Two shortcuts to know', sub: 'These work globally — even when MetaQuest is hidden or another window is focused.' };
+            case 3:
+                return { title: 'Add context', sub: 'Optional. Paste your resume, a job description, or notes so answers are tailored to you.' };
+            default:
+                return {
+                    title: 'Welcome to MetaQuest',
+                    sub: 'Your real-time AI assistant — it sees your screen, listens to meetings, and answers in context.',
+                };
         }
     }
 
@@ -610,10 +685,14 @@ export class OnboardingView extends LitElement {
     // ── Right pane content per step ──
     renderRight() {
         switch (this.currentSlide) {
-            case 1: return this.renderPermissions();
-            case 2: return this.renderShortcuts();
-            case 3: return this.renderContext();
-            default: return this.renderWelcome();
+            case 1:
+                return this.renderPermissions();
+            case 2:
+                return this.renderShortcuts();
+            case 3:
+                return this.renderContext();
+            default:
+                return this.renderWelcome();
         }
     }
 
@@ -622,9 +701,20 @@ export class OnboardingView extends LitElement {
             <div class="right-eyebrow">What you get</div>
             <div class="right-heading">Always ready to help</div>
             <div class="card-list">
-                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Sees your screen.</b> Ask anything about what's in front of you and get an instant answer.</div></div>
-                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Listens to meetings.</b> Live transcription and context-aware replies during interviews and calls.</div></div>
-                <div class="feature"><div class="feature-dot"></div><div class="feature-text"><b>Stays invisible.</b> A quiet overlay you toggle with a keystroke — no breaking flow.</div></div>
+                <div class="feature">
+                    <div class="feature-dot"></div>
+                    <div class="feature-text"><b>Sees your screen.</b> Ask anything about what's in front of you and get an instant answer.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-dot"></div>
+                    <div class="feature-text">
+                        <b>Listens to meetings.</b> Live transcription and context-aware replies during interviews and calls.
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="feature-dot"></div>
+                    <div class="feature-text"><b>Stays invisible.</b> A quiet overlay you toggle with a keystroke — no breaking flow.</div>
+                </div>
             </div>
         `;
     }
@@ -681,16 +771,22 @@ export class OnboardingView extends LitElement {
             <div class="right-eyebrow">Step ${this.gateMode ? '' : '2 of 4'}</div>
             <div class="right-heading">Grant access to continue</div>
             <div class="card-list">${this.isMac ? macCards : winCards}</div>
-            ${this.isMac ? html`
-                <div class="help-note">
-                    <div class="help-title">Not seeing MetaQuest in the list, or nothing happens?</div>
-                    <div class="help-desc">Move MetaQuest to your Applications folder, run this in Terminal to clear the download quarantine, then relaunch:</div>
-                    <div class="cmd-row">
-                        <code class="cmd">${this._quarantineCmd}</code>
-                        <button class="btn-ghost" @click=${() => this._copyQuarantineCmd()}>${this._copied ? 'Copied' : 'Copy'}</button>
-                    </div>
-                </div>
-            ` : ''}
+            ${
+                this.isMac
+                    ? html`
+                          <div class="help-note">
+                              <div class="help-title">Not seeing MetaQuest in the list, or nothing happens?</div>
+                              <div class="help-desc">
+                                  Move MetaQuest to your Applications folder, run this in Terminal to clear the download quarantine, then relaunch:
+                              </div>
+                              <div class="cmd-row">
+                                  <code class="cmd">${this._quarantineCmd}</code>
+                                  <button class="btn-ghost" @click=${() => this._copyQuarantineCmd()}>${this._copied ? 'Copied' : 'Copy'}</button>
+                              </div>
+                          </div>
+                      `
+                    : ''
+            }
         `;
     }
 
@@ -746,33 +842,49 @@ export class OnboardingView extends LitElement {
                     </div>
 
                     <div class="left-body">
-                        ${this.gateMode ? '' : html`
-                            <div class="steps-dots">
-                                ${Array.from({ length: totalSteps }, (_, i) => html`
-                                    <div class="dot ${i === this.currentSlide ? 'active' : ''} ${i < this.currentSlide ? 'done' : ''}"></div>
-                                `)}
-                            </div>
-                        `}
+                        ${
+                            this.gateMode
+                                ? ''
+                                : html`
+                                      <div class="steps-dots">
+                                          ${Array.from(
+                                    { length: totalSteps },
+                                    (_, i) => html`
+                                        <div class="dot ${i === this.currentSlide ? 'active' : ''} ${i < this.currentSlide ? 'done' : ''}"></div>
+                                    `
+                                )}
+                                      </div>
+                                  `
+                        }
                         <h1 class="left-title">${copy.title}</h1>
                         <p class="left-sub">${copy.sub}</p>
 
-                        ${gateBlocked ? html`
-                            <div class="gate-hint">
-                                ${this._needsRestartForScreen
-                                    ? '✅ Screen Recording granted — MetaQuest needs to restart for it to take effect (required on newer macOS versions).'
-                                    : '⚠ Screen Recording is required. Enable it for MetaQuest in Settings, then return here — this unlocks automatically.'}
-                            </div>
-                        ` : ''}
-                        ${(this.currentSlide === 1 && !gateBlocked && this.micPending) ? html`<div class="gate-hint">Microphone isn't granted yet. It's recommended, but you can continue and add it later in Settings.</div>` : ''}
+                        ${
+                            gateBlocked
+                                ? html`
+                                      <div class="gate-hint">
+                                          ${
+                                    this._needsRestartForScreen
+                                        ? '✅ Screen Recording granted — MetaQuest needs to restart for it to take effect (required on newer macOS versions).'
+                                        : '⚠ Screen Recording is required. Enable it for MetaQuest in Settings, then return here — this unlocks automatically.'
+                                }
+                                      </div>
+                                  `
+                                : ''
+                        }
+                        ${this.currentSlide === 1 && !gateBlocked && this.micPending ? html`<div class="gate-hint">Microphone isn't granted yet. It's recommended, but you can continue and add it later in Settings.</div>` : ''}
 
                         <div class="left-actions">
-                            ${this._needsRestartForScreen ? html`
-                                <button class="btn-primary" @click=${() => this.restartApp()}>Restart MetaQuest →</button>
-                            ` : html`
-                                <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
-                                    ${this.currentSlide === 1 && this.micPending && !gateBlocked ? 'Skip for now' : this._primaryLabel()} ${gateBlocked ? '' : '→'}
-                                </button>
-                            `}
+                            ${
+                                this._needsRestartForScreen
+                                    ? html` <button class="btn-primary" @click=${() => this.restartApp()}>Restart MetaQuest →</button> `
+                                    : html`
+                                          <button class="btn-primary" ?disabled=${gateBlocked} @click=${() => this.next()}>
+                                              ${this.currentSlide === 1 && this.micPending && !gateBlocked ? 'Skip for now' : this._primaryLabel()}
+                                              ${gateBlocked ? '' : '→'}
+                                          </button>
+                                      `
+                            }
                             ${showBack ? html`<button class="btn-back" @click=${() => this.back()}>Back</button>` : ''}
                         </div>
                     </div>
@@ -780,9 +892,7 @@ export class OnboardingView extends LitElement {
                     <div class="terms">By continuing you agree to our Terms of Service and Privacy Policy.</div>
                 </div>
 
-                <div class="pane-right">
-                    ${this.renderRight()}
-                </div>
+                <div class="pane-right">${this.renderRight()}</div>
             </div>
         `;
     }

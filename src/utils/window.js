@@ -70,7 +70,8 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     // permission prompt if not already granted.
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
-            desktopCapturer.getSources({ types: ['screen'] })
+            desktopCapturer
+                .getSources({ types: ['screen'] })
                 .then(sources => {
                     if (sources && sources.length > 0) {
                         callback({ video: sources[0], audio: 'loopback' });
@@ -401,7 +402,7 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             width: winW,
             height: winH,
             x: Math.floor((sw - winW) / 2),
-            y: 0,                          // top of screen — right below webcam
+            y: 0, // top of screen — right below webcam
             frame: false,
             transparent: true,
             alwaysOnTop: true,
@@ -471,16 +472,34 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     // for that moment, so the motion stays smooth and finishes on schedule even
     // when individual frames are dropped. `easing` lets callers pick the curve.
     function animateWindowGenie(win, from, to, durationMs, onDone, easing = easeInOutCubic) {
-        if (!win || win.isDestroyed()) { if (onDone) onDone(); return; }
+        if (!win || win.isDestroyed()) {
+            if (onDone) onDone();
+            return;
+        }
 
-        try { win.setOpacity(from.opacity); } catch (_) {}
-        try { win.setBounds({ x: Math.round(from.x), y: Math.round(from.y), width: Math.max(1, Math.round(from.width)), height: Math.max(1, Math.round(from.height)) }); } catch (_) {}
+        try {
+            win.setOpacity(from.opacity);
+        } catch (_) {}
+        try {
+            win.setBounds({
+                x: Math.round(from.x),
+                y: Math.round(from.y),
+                width: Math.max(1, Math.round(from.width)),
+                height: Math.max(1, Math.round(from.height)),
+            });
+        } catch (_) {}
 
         const startedAt = Date.now();
-        const finish = () => { if (onDone) onDone(); };
+        const finish = () => {
+            if (onDone) onDone();
+        };
 
         const timer = setInterval(() => {
-            if (win.isDestroyed()) { clearInterval(timer); finish(); return; }
+            if (win.isDestroyed()) {
+                clearInterval(timer);
+                finish();
+                return;
+            }
 
             const raw = Math.min(1, (Date.now() - startedAt) / durationMs);
             const t = easing(raw);
@@ -494,14 +513,21 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             try {
                 win.setBounds({ x: Math.round(x), y: Math.round(y), width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) });
                 win.setOpacity(Math.max(0, Math.min(1, opacity)));
-            } catch (_) { /* window may have been closed mid-animation */ }
+            } catch (_) {
+                /* window may have been closed mid-animation */
+            }
 
             if (raw >= 1) {
                 clearInterval(timer);
                 // Guarantee we land EXACTLY on the target (rounding during the
                 // loop can leave us a pixel short of the final bounds/opacity).
                 try {
-                    win.setBounds({ x: Math.round(to.x), y: Math.round(to.y), width: Math.max(1, Math.round(to.width)), height: Math.max(1, Math.round(to.height)) });
+                    win.setBounds({
+                        x: Math.round(to.x),
+                        y: Math.round(to.y),
+                        width: Math.max(1, Math.round(to.width)),
+                        height: Math.max(1, Math.round(to.height)),
+                    });
                     win.setOpacity(Math.max(0, Math.min(1, to.opacity)));
                 } catch (_) {}
                 finish();
@@ -550,7 +576,9 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         });
         mascotWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         mascotWindow.loadFile(path.join(__dirname, '../mascot.html'));
-        mascotWindow.on('closed', () => { mascotWindow = null; });
+        mascotWindow.on('closed', () => {
+            mascotWindow = null;
+        });
 
         // Genie "un-collapse": grow from the shrink point up to full mascot size
         // while fading in, once content has painted.
@@ -615,7 +643,9 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         // The window normally enforces a ~100x150 minimum size, which would
         // clamp the shrink animation well before it reaches the collapse point.
         // Relax it for the duration of the animation, then restore afterward.
-        try { mainWindow.setMinimumSize(1, 1); } catch (_) {}
+        try {
+            mainWindow.setMinimumSize(1, 1);
+        } catch (_) {}
 
         animateWindowGenie(
             mainWindow,
@@ -627,9 +657,15 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
                     mainWindow.hide(); // hidden entirely — never in the taskbar
                     // Restore bounds/opacity/min-size now while invisible, so
                     // it's ready to animate back in correctly next time.
-                    try { mainWindow.setBounds(originalBounds); } catch (_) {}
-                    try { mainWindow.setOpacity(1); } catch (_) {}
-                    try { mainWindow.setMinimumSize(Math.min(originalBounds.width, 100), Math.min(originalBounds.height, 150)); } catch (_) {}
+                    try {
+                        mainWindow.setBounds(originalBounds);
+                    } catch (_) {}
+                    try {
+                        mainWindow.setOpacity(1);
+                    } catch (_) {}
+                    try {
+                        mainWindow.setMinimumSize(Math.min(originalBounds.width, 100), Math.min(originalBounds.height, 150));
+                    } catch (_) {}
                 }
                 // Grow the mascot in from that same collapsed point for a
                 // continuous, single genie motion instead of two disjoint ones.
@@ -657,8 +693,13 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         // Shrink the mascot back down to that point, then grow the main window
         // out from it — the reverse genie motion, restoring the window.
         hideMascot(collapsedBounds, () => {
-            if (mainWindow.isDestroyed()) { genieAnimating = false; return; }
-            try { mainWindow.setMinimumSize(1, 1); } catch (_) {}
+            if (mainWindow.isDestroyed()) {
+                genieAnimating = false;
+                return;
+            }
+            try {
+                mainWindow.setMinimumSize(1, 1);
+            } catch (_) {}
             mainWindow.show();
             mainWindow.focus();
             animateWindowGenie(
@@ -667,7 +708,9 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
                 { ...restoreBounds, opacity: 1 },
                 240,
                 () => {
-                    try { mainWindow.setMinimumSize(Math.min(restoreBounds.width, 100), Math.min(restoreBounds.height, 150)); } catch (_) {}
+                    try {
+                        mainWindow.setMinimumSize(Math.min(restoreBounds.width, 100), Math.min(restoreBounds.height, 150));
+                    } catch (_) {}
                     genieAnimating = false;
                 },
                 easeOutExpo // burst out of the point, then settle into place
@@ -688,9 +731,17 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     // Re-apply the always-on-top overlay behaviour used everywhere except
     // onboarding (screen-saver level on Windows, floating on macOS).
     const restoreOverlayMode = win => {
-        try { win.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating', 1); } catch (_) { win.setAlwaysOnTop(true); }
-        try { win.setContentProtection(true); } catch (_) {}
-        try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (_) {}
+        try {
+            win.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating', 1);
+        } catch (_) {
+            win.setAlwaysOnTop(true);
+        }
+        try {
+            win.setContentProtection(true);
+        } catch (_) {}
+        try {
+            win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        } catch (_) {}
     };
 
     ipcMain.on('view-changed', (event, view) => {
@@ -705,10 +756,18 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
                 // non-topmost window that the user can move out of the way.
                 applyMainWindowSize(mainWindow, 'main');
                 mainWindow.setIgnoreMouseEvents(false);
-                try { mainWindow.setAlwaysOnTop(false); } catch (_) {}
-                try { mainWindow.setContentProtection(false); } catch (_) {}
-                try { mainWindow.setVisibleOnAllWorkspaces(false); } catch (_) {}
-                try { mainWindow.setMovable(true); } catch (_) {}
+                try {
+                    mainWindow.setAlwaysOnTop(false);
+                } catch (_) {}
+                try {
+                    mainWindow.setContentProtection(false);
+                } catch (_) {}
+                try {
+                    mainWindow.setVisibleOnAllWorkspaces(false);
+                } catch (_) {}
+                try {
+                    mainWindow.setMovable(true);
+                } catch (_) {}
                 mainWindow.focus();
             } else if (view === 'assistant') {
                 restoreOverlayMode(mainWindow);
