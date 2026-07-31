@@ -362,7 +362,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
             console.log('Linux capture started - system audio:', mediaStream.getAudioTracks().length > 0, 'microphone mode:', audioMode);
         } else {
-            // Windows - use display media with loopback for system audio
+            // Windows - use display media with loopback for system audio.
+            // Don't force sampleRate/channelCount — Windows loopback audio runs
+            // at the system's native rate (typically 48000 Hz) and Chromium
+            // often ignores requested constraints, producing silence. We capture
+            // at native rate and resample to 16kHz during processing.
             mediaStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     frameRate: 1,
@@ -370,18 +374,27 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                     height: { ideal: 1080 },
                 },
                 audio: {
-                    sampleRate: SAMPLE_RATE,
-                    channelCount: 2,
+                    // Let Windows provide audio at its native rate
                     echoCancellation: false, // Must be false for loopback/system audio
                     noiseSuppression: false, // Must be false for loopback/system audio
                     autoGainControl: false, // Must be false for loopback/system audio
                 },
             });
 
-            console.log('Windows capture started with loopback audio');
+            const audioTracks = mediaStream.getAudioTracks();
+            console.log('[Windows Audio] getDisplayMedia result — audio tracks:', audioTracks.length);
+            if (audioTracks.length > 0) {
+                console.log('[Windows Audio] Audio track settings:', audioTracks[0].getSettings());
+            }
 
-            // Setup audio processing for Windows loopback audio only
-            setupWindowsLoopbackProcessing();
+            if (audioTracks.length === 0) {
+                console.warn('[Windows Audio] No loopback audio track — system audio will not be captured');
+                metaMaxPro.setStatus('⚠️ No system audio detected. Select "Share audio" when prompted, or check your audio output device.');
+            } else {
+                console.log('Windows capture started with loopback audio');
+                // Setup audio processing for Windows loopback audio
+                await setupWindowsLoopbackProcessing();
+            }
 
             if (audioMode === 'mic_only' || audioMode === 'both') {
                 let micStream = null;
@@ -483,22 +496,82 @@ function setupLinuxSystemAudioProcessing() {
     audioProcessor.connect(audioContext.destination);
 }
 
-function setupWindowsLoopbackProcessing() {
-    // Setup audio processing for Windows loopback audio only
-    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    systemSourceNode = audioContext.createMediaStreamSource(mediaStream);
-    audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+async function setupWindowsLoopbackProcessing() {
+    const audioTracks = mediaStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+        console.error('[Windows Audio] No audio tracks in media stream — loopback audio unavailable');
+        metaMaxPro.setStatus('⚠️ No system audio captured. Check Windows audio output settings.');
+        return;
+    }
 
-    let audioBuffer = [];
-    const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION;
+    const audioTrack = audioTracks[0];
+    const trackSettings = audioTrack.getSettings();
+    const nativeSampleRate = trackSettings.sampleRate || 48000;
+    console.log('[Windows Audio] Native sample rate:', nativeSampleRate, 'Hz, channels:', trackSettings.channelCount || 2);
+
+    // Create AudioContext at the NATIVE sample rate — forcing 16kHz on Windows
+    // often produces silence because Chromium's loopback doesn't honor the
+    // requested rate. We resample to 16kHz manually before sending to the provider.
+    audioContext = new AudioContext({ sampleRate: nativeSampleRate });
+
+    // On Windows, AudioContext can start in "suspended" state — resume it
+    // or onaudioprocess never fires and audio appears dead.
+    if (audioContext.state === 'suspended') {
+        console.log('[Windows Audio] AudioContext suspended — resuming...');
+        try {
+            await audioContext.resume();
+        } catch (err) {
+            console.error('[Windows Audio] Failed to resume AudioContext:', err);
+        }
+    }
+    console.log('[Windows Audio] AudioContext state:', audioContext.state, 'sampleRate:', audioContext.sampleRate);
+
+    systemSourceNode = audioContext.createMediaStreamSource(mediaStream);
+    const inputChannels = trackSettings.channelCount || 2;
+    audioProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, inputChannels, 1);
+
+    let resampleBuffer = [];
+    const samplesPerChunk = SAMPLE_RATE * AUDIO_CHUNK_DURATION; // 1600 samples at 16kHz
+
+    // Linear-interpolation resampler: nativeSampleRate → 16kHz
+    function resampleTo16k(inputFloat32) {
+        const ratio = SAMPLE_RATE / nativeSampleRate;
+        const outputLength = Math.floor(inputFloat32.length * ratio);
+        const output = new Float32Array(outputLength);
+        for (let i = 0; i < outputLength; i++) {
+            const srcPos = i / ratio;
+            const srcIndex = Math.floor(srcPos);
+            const frac = srcPos - srcIndex;
+            const s0 = inputFloat32[srcIndex] || 0;
+            const s1 = srcIndex + 1 < inputFloat32.length ? inputFloat32[srcIndex + 1] : s0;
+            output[i] = s0 + frac * (s1 - s0);
+        }
+        return output;
+    }
 
     audioProcessor.onaudioprocess = async e => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        audioBuffer.push(...inputData);
+        const inputBuffer = e.inputBuffer;
 
-        // Process audio in chunks
-        while (audioBuffer.length >= samplesPerChunk) {
-            const chunk = audioBuffer.splice(0, samplesPerChunk);
+        // Downmix stereo→mono if needed, else use channel 0
+        let channelData;
+        if (inputBuffer.numberOfChannels >= 2) {
+            const left = inputBuffer.getChannelData(0);
+            const right = inputBuffer.getChannelData(1);
+            channelData = new Float32Array(left.length);
+            for (let i = 0; i < left.length; i++) {
+                channelData[i] = (left[i] + right[i]) / 2;
+            }
+        } else {
+            channelData = inputBuffer.getChannelData(0);
+        }
+
+        // Resample from native rate to 16kHz
+        const resampled = resampleTo16k(channelData);
+        resampleBuffer.push(...resampled);
+
+        // Process in 100ms chunks at 16kHz
+        while (resampleBuffer.length >= samplesPerChunk) {
+            const chunk = resampleBuffer.splice(0, samplesPerChunk);
             const pcmData16 = convertFloat32ToInt16(chunk);
             const base64Data = arrayBufferToBase64(pcmData16.buffer);
 
@@ -511,6 +584,8 @@ function setupWindowsLoopbackProcessing() {
 
     systemSourceNode.connect(audioProcessor);
     audioProcessor.connect(audioContext.destination);
+
+    console.log('[Windows Audio] Loopback processing started successfully');
 }
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
