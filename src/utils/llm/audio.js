@@ -262,6 +262,8 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
                 mimeType: 'audio/pcm;rate=16000',
             },
         });
+        // Update activity timestamp on every audio send to prevent idle timeout
+        S.lastActivityTimestamp = Date.now();
     } catch (error) {
         console.error('Error sending audio to Gemini:', error);
     }

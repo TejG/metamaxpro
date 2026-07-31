@@ -371,7 +371,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
 
         startWhisperVAD(onWhisperTranscription);
-        sendToRenderer('update-status', 'Whisper Live');
+        sendToRenderer('update-status', 'Live');
         console.log('[Whisper] Mode initialized — profile:', profile);
         return true;
     });

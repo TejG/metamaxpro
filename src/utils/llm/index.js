@@ -112,7 +112,13 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const callbacks = {
         onopen: function () {
             S.sessionReadyAt = Date.now();
+            S.lastActivityTimestamp = Date.now();
             sendToRenderer('update-status', 'Live session connected');
+
+            // Start keepalive timer to prevent idle timeout
+            if (global.geminiSessionRef) {
+                startKeepalive(global.geminiSessionRef);
+            }
         },
         onmessage: function (message) {
             // Handle input transcription (what was spoken). Each chunk resets the
@@ -143,6 +149,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         },
         onclose: function (e) {
             console.log('Session closed:', e.reason);
+            stopKeepalive(); // Stop keepalive timer
             if (S.isUserClosing) {
                 S.isUserClosing = false;
                 sendToRenderer('update-status', 'Session closed');
@@ -271,6 +278,59 @@ async function attemptReconnect() {
     return false;
 }
 
+// ── Keepalive to prevent idle timeout ──────────────────────────────
+// Gemini Live sessions timeout after ~15 minutes of inactivity. Send periodic
+// silent audio packets to keep the session alive during long pauses.
+const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000; // Check every 5 minutes
+const IDLE_TIMEOUT_WARNING_MS = 12 * 60 * 1000; // Warn after 12 minutes idle (before 15min timeout)
+
+function startKeepalive(geminiSessionRef) {
+    stopKeepalive(); // Clear any existing timer
+
+    S.sessionKeepaliveTimer = setInterval(async () => {
+        const idleDuration = Date.now() - S.lastActivityTimestamp;
+
+        // If idle for 12+ minutes, send keepalive packet
+        if (idleDuration >= IDLE_TIMEOUT_WARNING_MS && geminiSessionRef.current) {
+            console.log('[Keepalive] Sending heartbeat packet (idle:', Math.floor(idleDuration / 1000 / 60), 'min)');
+            try {
+                // Send 100ms of silence (minimal payload)
+                const silentAudio = Buffer.alloc(3200).toString('base64'); // 100ms @ 16kHz mono
+                await geminiSessionRef.current.sendRealtimeInput({
+                    audio: {
+                        data: silentAudio,
+                        mimeType: 'audio/pcm;rate=16000',
+                    },
+                });
+                S.lastActivityTimestamp = Date.now(); // Reset activity timestamp
+                console.log('[Keepalive] Heartbeat sent successfully');
+            } catch (error) {
+                console.error('[Keepalive] Failed to send heartbeat:', error);
+                // Session likely dead - trigger reconnect
+                if (S.sessionParams && S.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    console.log('[Keepalive] Session appears dead, triggering reconnect');
+                    stopKeepalive(); // Stop keepalive before reconnect
+                    attemptReconnect();
+                }
+            }
+        }
+    }, KEEPALIVE_INTERVAL_MS);
+
+    console.log('[Keepalive] Started (check interval:', KEEPALIVE_INTERVAL_MS / 1000 / 60, 'min)');
+}
+
+function stopKeepalive() {
+    if (S.sessionKeepaliveTimer) {
+        clearInterval(S.sessionKeepaliveTimer);
+        S.sessionKeepaliveTimer = null;
+        console.log('[Keepalive] Stopped');
+    }
+}
+
+function updateActivityTimestamp() {
+    S.lastActivityTimestamp = Date.now();
+}
+
 function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
     global.geminiSessionRef = geminiSessionRef;
@@ -319,6 +379,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (geminiSessionRef.current) {
             try {
                 S.isUserClosing = true;
+                stopKeepalive(); // Stop keepalive when closing session
                 geminiSessionRef.current.close();
             } catch (_) {
                 /* already closed */
@@ -345,7 +406,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
 
         startWhisperVAD(onWhisperTranscription);
-        sendToRenderer('update-status', 'Whisper Live');
+        sendToRenderer('update-status', 'Live');
         console.log('[Whisper] Mode initialized — profile:', profile);
         return true;
     });
@@ -606,6 +667,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             // Set flag to prevent reconnection attempts
             S.isUserClosing = true;
             S.sessionParams = null;
+
+            // Stop keepalive timer
+            stopKeepalive();
 
             // Cleanup session
             if (geminiSessionRef.current) {

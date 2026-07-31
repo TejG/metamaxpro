@@ -26,6 +26,7 @@
         "@huggingface/transformers": "^3.8.1",
         "electron-squirrel-startup": "^1.0.1",
         "ollama": "^0.6.3",
+        "tesseract.js": "^7.0.0",
         "update-electron-app": "^3.3.0",
         "ws": "^8.19.0"
     },

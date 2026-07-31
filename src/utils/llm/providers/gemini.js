@@ -32,6 +32,14 @@ async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
     try {
         const ai = new GoogleGenAI({ apiKey });
         const messages = trimmed.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+        
+        // Gemini requires conversations to end with a user message, not a model message.
+        // If the last message is from the model, remove it.
+        if (messages.length > 0 && messages[messages.length - 1].role === 'model') {
+            console.log('[Gemini] Trimming final model message to comply with API requirements');
+            messages.pop();
+        }
+        
         const sys = S.currentSystemPrompt || 'You are a helpful assistant.';
         const contents = [
             { role: 'user', parts: [{ text: sys }] },

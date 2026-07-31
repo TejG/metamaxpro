@@ -185,7 +185,7 @@ async function initializeWhisper(profile = 'interview') {
     const prefs = await storage.getPreferences();
     const success = await ipcRenderer.invoke('initialize-whisper', buildContext(prefs), profile);
     if (success) {
-        metaMaxPro.setStatus('Whisper Live');
+        metaMaxPro.setStatus('Live');
         return true;
     } else {
         metaMaxPro.setStatus('error');

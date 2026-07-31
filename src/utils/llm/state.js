@@ -52,6 +52,10 @@ const S = {
     isUserClosing: false,
     sessionParams: null,
     reconnectAttempts: 0,
+
+    // Keepalive to prevent idle timeout (Gemini Live sessions timeout after ~15min inactivity)
+    sessionKeepaliveTimer: null,
+    lastActivityTimestamp: Date.now(),
 };
 
 // Lazy-loaded to avoid a circular dependency (localai.js imports from llm/index.js)

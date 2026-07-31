@@ -237,7 +237,7 @@ export class MetaMaxProApp extends LitElement {
             background: rgba(255, 255, 255, 0.08);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             backdrop-filter: blur(20px) saturate(180%);
-            border: 1px solid rgba(255, 255, 255, 0.222)
+            border: 1px solid rgba(255, 255, 255, 0.222);
             box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 4px 16px rgba(0, 0, 0, 0.18);
             height: 52px;
             -webkit-app-region: drag;
@@ -471,6 +471,12 @@ export class MetaMaxProApp extends LitElement {
         }
 
         .bottom-nav .nav-item svg { width: 18px; height: 18px; }
+
+        /* Give non-live content room at the bottom so the fixed bottom nav
+           never covers the last row of a settings page. */
+        .content-inner:not(.live) {
+            padding-bottom: 84px;
+        }
 
         /* ── Settings shell: top tab bar + scrollable body ── */
         .settings-shell {
@@ -1072,7 +1078,7 @@ export class MetaMaxProApp extends LitElement {
                     <main-view
                         .selectedProfile=${this.selectedProfile}
                         .onProfileChange=${p => this.handleProfileChange(p)}
-                        .onNavigate=${v => this.navigate(v)}
+                        .onNavigate=${v => this._navItemClick(v)}
                         .onStart=${() => this.handleStart()}
                         .onExternalLink=${url => this.handleExternalLinkClick(url)}
                         .whisperDownloading=${this._whisperDownloading}
@@ -1261,8 +1267,8 @@ export class MetaMaxProApp extends LitElement {
                     ${items.map(
                         item => html`
                             <button
-                                class="nav-item ${this.currentView === item.id ? 'active' : ''}"
-                                @click=${() => this.navigate(item.id)}
+                                class="nav-item ${this._navItemActive(item.id) ? 'active' : ''}"
+                                @click=${() => this._navItemClick(item.id)}
                                 title=${item.label}
                             >
                                 ${item.icon}
@@ -1273,6 +1279,39 @@ export class MetaMaxProApp extends LitElement {
                 </div>
             </div>
         `;
+    }
+
+    // Bottom-nav items map onto either a top-level view ('main') or a settings
+    // tab. The settings view is the only place these sections actually render,
+    // so route non-main items through openSettings instead of navigate() —
+    // otherwise the app would show a blank "Unknown view" screen.
+    _navItemClick(id) {
+        const tabMap = {
+            'ai-customize': 'profile',
+            history: 'history',
+            customize: 'preferences',
+            feedback: 'help',
+            help: 'help',
+        };
+        const tab = tabMap[id];
+        if (tab) {
+            this.openSettings(tab);
+        } else {
+            this.navigate(id);
+        }
+    }
+
+    _navItemActive(id) {
+        if (id === 'main') return this.currentView === 'main';
+        if (this.currentView !== 'settings') return false;
+        const tabMap = {
+            'ai-customize': 'profile',
+            history: 'history',
+            customize: 'preferences',
+            feedback: 'help',
+            help: 'help',
+        };
+        return this.settingsTab === tabMap[id];
     }
 
     renderLiveBar() {
@@ -1295,7 +1334,7 @@ export class MetaMaxProApp extends LitElement {
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
-                    <span class="live-bar-text">Meta Booster</span>
+                    <span class="live-bar-text">MetaQuest</span>
                 </div>
                 <div class="live-bar-center">
                     <span class="live-bar-text">${profileLabels[this.selectedProfile] || 'Session'}</span>
@@ -1377,6 +1416,7 @@ export class MetaMaxProApp extends LitElement {
                     ${isLive ? this.renderLiveBar() : ''}
                     <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
+                ${this.renderSidebar()}
             </div>
         `;
     }

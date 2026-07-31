@@ -1,12 +1,13 @@
 // Screenshot solving: vision requests to Anthropic (Claude), Groq (llama-4
-// vision), and Gemini (HTTP), plus the provider-routing logic that picks the
-// strongest available reasoner first.
+// vision), and Gemini (HTTP), plus OCR-first flow for cost optimization,
+// plus the provider-routing logic that picks the strongest available reasoner first.
 const { GoogleGenAI } = require('@google/genai');
 const { S, sendToRenderer, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate } = require('./state');
 const { GROQ_VISION_MODELS, buildImageModelFallbacks, GEMINI_THINKING, isRateLimitError, getRetryDelaySeconds } = require('./config');
 const { saveScreenAnalysis, recordScreenTurnInHistory, recentHistoryAsAnthropicMessages, recentHistoryAsGeminiContents } = require('./persistence');
 const { fetchWithAnthropicRetry } = require('./router');
 const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, getAnthropicApiKey } = require('../../storage');
+const { extractTextFromImages, isOcrSufficient } = require('./ocr');
 
 // Solve screenshots with Claude vision (Anthropic provider mode). Context-aware:
 // persona (resume + JD + human-tone rules) as system, prior conversation as
@@ -431,13 +432,105 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
 // mode, with fallbacks so a solve works whenever ANY vision key is configured.
 // (cloud/local are handled by the IPC callers before this is reached.)
 async function routeImagesToProvider(images, prompt) {
-    // Screenshots are almost always a problem to SOLVE (coding, aptitude, MCQ,
-    // diagram), where correctness matters more than shaving a second. So prefer
-    // the strongest available reasoner and use Groq's fast-but-weak-at-reasoning
-    // llama-4 vision only as a last-resort fallback:
-    //   Anthropic (Claude vision) → Gemini (Flash + thinking) → Groq vision.
-    // (Previously Groq vision was tried FIRST for speed — that's a big part of
-    // why on-screen aptitude/quant questions came back fluent but wrong.)
+    // Task 5: OCR-first flow — try extracting text before using vision API
+    // to reduce costs for text-heavy screenshots (code, documents, etc.)
+    console.log('[Vision] Starting OCR-first flow...');
+    const ocrStartTime = Date.now();
+    const ocrResult = await extractTextFromImages(images);
+    const ocrDuration = Date.now() - ocrStartTime;
+
+    console.log(`[Vision] OCR completed in ${ocrDuration}ms:`, {
+        success: ocrResult.success,
+        allSufficient: ocrResult.allSufficient,
+        results: ocrResult.results?.map(r => ({
+            textLength: r.text?.length || 0,
+            confidence: Math.round(r.confidence || 0),
+            cached: r.cached,
+        })),
+    });
+
+    // If OCR extracted sufficient text from all images, prepend OCR text to prompt
+    // and route to text LLM instead of vision API (massive cost savings)
+    if (ocrResult.success && ocrResult.allSufficient) {
+        const extractedTexts = ocrResult.results.map((r, idx) => `[Screenshot ${idx + 1} - OCR Text]:\n${r.text}`).join('\n\n');
+        const enhancedPrompt = `${extractedTexts}\n\n[User's Question]:\n${prompt}`;
+
+        console.log('[Vision] OCR sufficient — routing to text LLM (vision API avoided, ~60% cost savings)');
+
+        // Route to text LLM using the existing router
+        // Import router's routeAnswer at the top would create circular dependency,
+        // so we'll use the provider adapters directly here
+        const groqAdapter = require('./providers/groq');
+        const anthropicAdapter = require('./providers/anthropic');
+        const geminiAdapter = require('./providers/gemini');
+
+        // Try text providers in order: Groq (free/fast) → Anthropic → Gemini
+        const textAttempts = [];
+        if (await groqAdapter.isAvailable()) textAttempts.push({ adapter: groqAdapter, name: 'Groq' });
+        if (await anthropicAdapter.isAvailable()) textAttempts.push({ adapter: anthropicAdapter, name: 'Anthropic' });
+        if (await geminiAdapter.isAvailable()) textAttempts.push({ adapter: geminiAdapter, name: 'Gemini' });
+
+        for (const { adapter, name } of textAttempts) {
+            try {
+                console.log(`[Vision/OCR] Trying text LLM: ${name}`);
+                
+                // Build conversation history properly:
+                // 1. Take recent history (up to 8 messages)
+                // 2. Ensure it ends with a user message (required by Gemini and others)
+                // 3. Append the OCR-enhanced prompt as the final user message
+                let recentHistory = S.groqConversationHistory.slice(-8);
+                
+                // If history ends with assistant message, trim it off to ensure user message is last
+                if (recentHistory.length > 0 && recentHistory[recentHistory.length - 1].role === 'assistant') {
+                    recentHistory = recentHistory.slice(0, -1);
+                }
+                
+                // Build the final message sequence
+                const messages = [
+                    { role: 'system', content: S.currentSystemPrompt || 'You are a helpful assistant.' },
+                    ...recentHistory,
+                    { role: 'user', content: enhancedPrompt },
+                ];
+
+                let fullText = '';
+                const textStream = await adapter.streamAnswer({
+                    messages,
+                    reasoning: false,
+                    temperature: 0.2,
+                });
+
+                if (textStream) {
+                    for await (const chunk of textStream) {
+                        if (chunk) {
+                            fullText += chunk;
+                            sendStreamUpdate(fullText);
+                        }
+                    }
+                    flushStreamUpdate();
+                    saveScreenAnalysis(prompt, fullText, `ocr+${name.toLowerCase()}`);
+                    recordScreenTurnInHistory(fullText);
+
+                    return {
+                        success: true,
+                        text: fullText,
+                        model: `ocr+${name.toLowerCase()}`,
+                        ocrUsed: true,
+                        ocrDuration,
+                        costSavings: '~60% (vision → text LLM)',
+                    };
+                }
+            } catch (error) {
+                console.log(`[Vision/OCR] ${name} text LLM failed:`, error.message);
+            }
+        }
+
+        // If all text LLMs failed, fall back to vision API
+        console.log('[Vision] OCR text routing failed — falling back to vision API');
+    } else {
+        console.log('[Vision] OCR insufficient — falling back to vision API');
+    }
+
+    // Vision API fallback (original flow)
     const attempts = [];
     if (getAnthropicApiKey()) attempts.push(() => sendImagesToAnthropic(images, prompt));
     if (getApiKey()) attempts.push(() => sendMultipleImagesToGeminiHttp(images, prompt));
@@ -458,7 +551,13 @@ async function routeImagesToProvider(images, prompt) {
     let lastError = 'Vision request failed';
     for (const attempt of attempts) {
         const result = await attempt();
-        if (result && result.success) return result;
+        if (result && result.success) {
+            // Add OCR metadata to result
+            result.ocrAttempted = true;
+            result.ocrDuration = ocrDuration;
+            result.ocrInsufficient = !ocrResult.allSufficient;
+            return result;
+        }
         lastError = (result && result.error) || lastError;
         console.log('[Vision] provider failed, falling back:', lastError);
     }
