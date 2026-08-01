@@ -12,6 +12,7 @@ const { S, sendStreamUpdate } = require('../state');
 const { GROQ_FALLBACK_MODELS, stripThinkingTags, trimConversationHistoryForGemma } = require('../config');
 const telemetry = require('../telemetry');
 const { getGroqApiKey, getModelForToday, incrementCharUsage } = require('../../../storage');
+const health = require('./health');
 
 const MODEL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 let _modelCache = null;
@@ -109,6 +110,11 @@ async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
             console.error(`[Groq] ${candidate} → ${r.status}:`, errText.slice(0, 200));
             if (r.status === 404 || r.status === 400 || r.status === 413 || /decommission|not found|reasoning_effort|too large|context|invalid model/i.test(errText))
                 continue;
+            // Account-level failure (quota/credit/5xx): trip the circuit breaker
+            // so the cascade skips Groq instantly instead of retrying it (and
+            // paying this failed round-trip) on every subsequent question.
+            const kind = health.classifyFailure(r.status, errText);
+            if (kind) health.markDown('groq', kind);
             return null;
         }
         if (!response) return null;

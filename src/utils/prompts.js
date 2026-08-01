@@ -644,9 +644,7 @@ function getSystemPrompt(profileKey = 'job_interview', customPrompt = '', respon
             ? `USER-SPECIFIC INSTRUCTIONS\n${customPrompt.trim()}\n\nApply these instructions unless they conflict with factual accuracy, safety, or the grounding rules.`
             : '';
 
-    return [GLOBAL_SYSTEM_PROMPT.trim(), profile.trim(), mode.trim(), CODE_COMPONENT_PROMPT.trim(), customSection.trim()]
-        .filter(Boolean)
-        .join('\n\n');
+    return [GLOBAL_SYSTEM_PROMPT.trim(), profile.trim(), mode.trim(), customSection.trim()].filter(Boolean).join('\n\n');
 }
 
 function formatRuntimeContext(runtimeContext = {}) {

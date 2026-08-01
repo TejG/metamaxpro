@@ -156,6 +156,109 @@ export class AssistantView extends LitElement {
         .controls-spacer {
             flex: 1;
         }
+        /* ── Appearance popover (one "Aa" button → text size + background) ──
+           Consolidating both display controls behind a single button keeps the
+           footer to exactly three neutral controls (Aa, gear, spacer) so it
+           never feels crowded, while keeping the settings one click away. */
+        .appearance-wrap {
+            position: relative;
+            flex: 0 0 auto;
+        }
+        .appearance-btn {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            border-radius: 100px;
+            width: 32px;
+            height: 32px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: var(--font);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition:
+                border-color var(--transition),
+                background var(--transition),
+                color var(--transition);
+        }
+        .appearance-btn:hover,
+        .appearance-btn.open {
+            border-color: var(--accent);
+            background: var(--bg-surface);
+            color: var(--text-primary);
+        }
+        .appearance-pop {
+            position: absolute;
+            bottom: 40px;
+            right: 0;
+            width: 240px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 50;
+        }
+        .appearance-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .appearance-label {
+            font-size: var(--font-size-xs, 12px);
+            color: var(--text-secondary);
+            width: 74px;
+            flex-shrink: 0;
+        }
+        .appearance-value {
+            font-size: var(--font-size-xs, 12px);
+            color: var(--text-muted);
+            width: 36px;
+            text-align: right;
+            font-family: var(--font-mono);
+        }
+        .stepper {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            flex: 1;
+        }
+        .stepper-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            width: 30px;
+            height: 26px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background var(--transition), color var(--transition);
+        }
+        .stepper-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .stepper-value {
+            flex: 1;
+            text-align: center;
+            font-size: var(--font-size-xs, 12px);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+        }
+        .appearance-slider {
+            flex: 1;
+            accent-color: var(--accent);
+            height: 4px;
+            cursor: pointer;
+        }
         .profile-select {
             background: var(--bg-elevated);
             border: 1px solid var(--border);
@@ -767,6 +870,11 @@ export class AssistantView extends LitElement {
         onProfileChange: { type: Function },
         onStart: { type: Function },
         onOpenSettings: { type: Function },
+        onFontSizeChange: { type: Function },
+        onTransparencyChange: { type: Function },
+        fontSizeValue: { type: Number },
+        transparencyValue: { type: Number },
+        appearanceOpen: { type: Boolean, state: true },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
         capturedCount: { type: Number, state: true },
@@ -782,17 +890,42 @@ export class AssistantView extends LitElement {
         this.onProfileChange = () => {};
         this.onStart = () => {};
         this.onOpenSettings = () => {};
+        this.onFontSizeChange = () => {};
+        this.onTransparencyChange = () => {};
+        this.fontSizeValue = 16;
+        this.transparencyValue = 0.8;
+        this.appearanceOpen = false;
         this.sessionActive = false;
         this.isAnalyzing = false;
         this.capturedCount = 0;
         this.gazeWindowOpen = false;
         this._animFrame = null;
+        this._lastMsgCount = 0;
     }
 
     _onProfileChange(e) {
         const val = e.target.value;
         this.selectedProfile = val;
         if (this.onProfileChange) this.onProfileChange(val);
+    }
+
+    // ── Appearance popover (Aa) ──
+    _toggleAppearance(e) {
+        e.stopPropagation();
+        this.appearanceOpen = !this.appearanceOpen;
+        if (this.appearanceOpen) {
+            // Dismiss on any outside click (capture phase so shadow DOM clicks count)
+            this._closeAppearance = ev => {
+                const path = ev.composedPath ? ev.composedPath() : [];
+                if (!path.some(el => el.classList && (el.classList.contains('appearance-pop') || el.classList.contains('appearance-btn')))) {
+                    this.appearanceOpen = false;
+                    document.removeEventListener('click', this._closeAppearance, true);
+                }
+            };
+            document.addEventListener('click', this._closeAppearance, true);
+        } else if (this._closeAppearance) {
+            document.removeEventListener('click', this._closeAppearance, true);
+        }
     }
 
     getProfileNames() {
@@ -1074,6 +1207,7 @@ export class AssistantView extends LitElement {
     disconnectedCallback() {
         super.disconnectedCallback();
         this._stopWaveformAnimation();
+        if (this._closeAppearance) document.removeEventListener('click', this._closeAppearance, true);
 
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -1378,11 +1512,18 @@ export class AssistantView extends LitElement {
                     ? `Listening to your ${profileNames[this.selectedProfile] || 'session'}… ask a question, type, or Analyze your screen.`
                     : 'Start a session to begin. Answers will appear here.';
                 container.innerHTML = `<div class="chat-empty">${idle}</div>`;
+                this._lastMsgCount = 0;
                 return;
             }
 
-            // Keep the view pinned to the bottom only if already near it.
-            const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+            // Auto-scroll ONLY when a new message is added (new question or a
+            // new answer bubble) — never while an existing answer is streaming.
+            // During streaming the content grows on every chunk, and pinning to
+            // the bottom made it impossible to read the start of the answer on
+            // small screens. The user keeps full scroll control mid-generation.
+            const msgCount = this.responses.length;
+            const isNewMessage = msgCount !== this._lastMsgCount;
+            this._lastMsgCount = msgCount;
 
             const esc = t => (t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             container.innerHTML = this.responses
@@ -1463,9 +1604,18 @@ export class AssistantView extends LitElement {
             // After rendering, add copy buttons to code blocks
             this._attachCopyButtons(container);
 
-            // Auto-scroll to the newest answer if the user was already at the bottom
-            if (nearBottom) {
-                container.scrollTop = container.scrollHeight;
+            // Scroll only on NEW messages: bring the newest bubble's TOP into
+            // view so the user starts reading from the beginning of the new
+            // question/answer. Streaming growth of the last answer never moves
+            // the scroll position — the user reads and scrolls at their own pace.
+            if (isNewMessage) {
+                const rows = container.querySelectorAll('.chat-row');
+                const newest = rows[rows.length - 1];
+                if (newest) {
+                    container.scrollTop = Math.max(0, newest.offsetTop - 8);
+                } else {
+                    container.scrollTop = container.scrollHeight;
+                }
             }
         }
     }
@@ -1644,7 +1794,7 @@ export class AssistantView extends LitElement {
                 <div class="controls-row">
                     ${
                         !this.sessionActive
-                            ? ''
+                            ? html`<span class="controls-spacer"></span>`
                             : html`
                                   <select class="profile-select" .value=${this.selectedProfile} @change=${this._onProfileChange} title="Profile">
                                       ${Object.entries(profileNames).map(([v, l]) => html`<option value=${v}>${l}</option>`)}
@@ -1693,6 +1843,57 @@ export class AssistantView extends LitElement {
                                   <span class="controls-spacer"></span>
                               `
                     }
+                    <div class="appearance-wrap">
+                        <button
+                            class="appearance-btn ${this.appearanceOpen ? 'open' : ''}"
+                            @click=${this._toggleAppearance}
+                            title="Appearance — text size & background"
+                        >
+                            Aa
+                        </button>
+                        ${
+                            this.appearanceOpen
+                                ? html`
+                                      <div class="appearance-pop">
+                                          <div class="appearance-row">
+                                              <span class="appearance-label">Text size</span>
+                                              <div class="stepper">
+                                                  <button
+                                                      class="stepper-btn"
+                                                      @click=${() => this.onFontSizeChange && this.onFontSizeChange(-1)}
+                                                      title="Smaller text"
+                                                  >
+                                                      −
+                                                  </button>
+                                                  <span class="stepper-value">${this.fontSizeValue || 16}px</span>
+                                                  <button
+                                                      class="stepper-btn"
+                                                      @click=${() => this.onFontSizeChange && this.onFontSizeChange(1)}
+                                                      title="Larger text"
+                                                  >
+                                                      +
+                                                  </button>
+                                              </div>
+                                          </div>
+                                          <div class="appearance-row">
+                                              <span class="appearance-label">Background</span>
+                                              <input
+                                                  class="appearance-slider"
+                                                  type="range"
+                                                  min="0.1"
+                                                  max="1"
+                                                  step="0.05"
+                                                  .value=${String(this.transparencyValue ?? 0.8)}
+                                                  @input=${e => this.onTransparencyChange && this.onTransparencyChange(parseFloat(e.target.value))}
+                                                  title="Background opacity"
+                                              />
+                                              <span class="appearance-value">${Math.round((this.transparencyValue ?? 0.8) * 100)}%</span>
+                                          </div>
+                                      </div>
+                                  `
+                                : ''
+                        }
+                    </div>
                     <button class="gear-btn" @click=${() => this.onOpenSettings && this.onOpenSettings()} title="Settings">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
                             <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">

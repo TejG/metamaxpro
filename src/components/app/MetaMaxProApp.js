@@ -246,8 +246,63 @@ export class MetaMaxProApp extends LitElement {
         .live-bar-left {
             display: flex;
             align-items: center;
+            gap: 10px;
+            flex: 1;
+            min-width: 0; /* let the status pill ellipsize instead of overlapping */
             -webkit-app-region: no-drag;
             z-index: 1;
+        }
+
+        .live-bar-mode {
+            font-size: var(--font-size-xs, 12px);
+            color: rgba(255, 255, 255, 0.55);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* Compact status pill (Listening / Thinking / Working it out…) — lives
+           on the left with ellipsis overflow, so it can never collide with the
+           timer/buttons on the right like the old absolutely-centered label. */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: var(--font-size-xs, 12px);
+            color: rgba(255, 255, 255, 0.85);
+            background: rgba(255, 255, 255, 0.09);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 999px;
+            padding: 2px 10px;
+            min-width: 0;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #999;
+            flex-shrink: 0;
+        }
+
+        .status-pill.ok .status-dot {
+            background: #2fbf71;
+            box-shadow: 0 0 6px rgba(47, 191, 113, 0.7);
+        }
+
+        .status-pill.busy .status-dot {
+            background: #f5a623;
+            box-shadow: 0 0 6px rgba(245, 166, 35, 0.7);
+            animation: pulse-dot 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            50% {
+                opacity: 0.4;
+            }
         }
 
         .live-bar-back {
@@ -273,21 +328,16 @@ export class MetaMaxProApp extends LitElement {
         }
 
         .live-bar-center {
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: var(--font-size-sm, 13px);
-            color: rgba(255, 255, 255, 0.92);
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-            font-weight: var(--font-weight-medium);
-            white-space: nowrap;
-            pointer-events: none;
+            /* retired: the absolutely-centered label overlapped the right
+               cluster whenever the status text appeared */
+            display: none;
         }
 
         .live-bar-right {
             display: flex;
             align-items: center;
             gap: var(--space-md);
+            flex-shrink: 0;
             -webkit-app-region: no-drag;
             z-index: 1;
         }
@@ -620,6 +670,10 @@ export class MetaMaxProApp extends LitElement {
             this._fontSize = Number.isFinite(fs) ? fs : 16;
             document.documentElement.style.setProperty('--response-font-size', `${this._fontSize}px`);
 
+            // Seed the footer appearance popover with the saved transparency
+            // (theme.load() already applied it visually on startup).
+            this._transparency = prefs.backgroundTransparency ?? 0.8;
+
             this._storageLoaded = true;
             this.requestUpdate();
 
@@ -892,6 +946,23 @@ export class MetaMaxProApp extends LitElement {
         } catch (_) {}
     }
 
+    // Adjust background transparency from the footer appearance popover.
+    // Reuses the exact same theme pipeline as the Settings page slider, so
+    // both controls stay in sync (Settings reads the persisted preference).
+    async _changeTransparency(value) {
+        const v = Math.min(1, Math.max(0.1, Number(value) || 0.8));
+        this._transparency = v;
+        try {
+            const prefs = await metaMaxPro.storage.getPreferences();
+            const colors = metaMaxPro.theme.get(prefs.theme || 'dark');
+            metaMaxPro.theme.applyBackgrounds(colors.background, v);
+            await metaMaxPro.storage.updatePreference('backgroundTransparency', v);
+        } catch (e) {
+            console.error('Failed to change transparency:', e);
+        }
+        this.requestUpdate();
+    }
+
     async handleHideToggle() {
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -961,6 +1032,24 @@ export class MetaMaxProApp extends LitElement {
     async handleProfileChange(profile) {
         this.selectedProfile = profile;
         await metaMaxPro.storage.updatePreference('selectedProfile', profile);
+        // Apply the mode LIVE to the running session (rebuilds the system
+        // prompt in the main process) and confirm it in the status area so
+        // the selector visibly does something.
+        if (this.sessionActive && window.require) {
+            try {
+                const { ipcRenderer } = window.require('electron');
+                const res = await ipcRenderer.invoke('update-profile', profile);
+                if (res && res.success) {
+                    this.setStatus(`Mode switched ✓`);
+                    setTimeout(() => {
+                        if (this.statusText === 'Mode switched ✓') this.setStatus('Listening...');
+                    }, 2000);
+                }
+            } catch (e) {
+                console.error('Failed to switch profile live:', e);
+            }
+        }
+        this.requestUpdate();
     }
 
     async handleLanguageChange(language) {
@@ -1105,6 +1194,10 @@ export class MetaMaxProApp extends LitElement {
                         .onProfileChange=${p => this.handleProfileChange(p)}
                         .onStart=${() => this.handleStart()}
                         .onOpenSettings=${() => this.openSettings()}
+                        .onFontSizeChange=${d => this._changeFontSize(d)}
+                        .onTransparencyChange=${v => this._changeTransparency(v)}
+                        .fontSizeValue=${this._fontSize || 16}
+                        .transparencyValue=${this._transparency ?? 0.8}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
                         @response-index-changed=${this.handleResponseIndexChanged}
                         @response-animation-complete=${() => {
@@ -1340,15 +1433,19 @@ export class MetaMaxProApp extends LitElement {
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
-                    <span class="live-bar-text">MetaQuest</span>
-                </div>
-                <div class="live-bar-center">
-                    <span class="live-bar-text">${profileLabels[this.selectedProfile] || 'Session'}</span>
+                    <span class="live-bar-text brand">MetaQuest</span>
+                    <span class="live-bar-mode">${profileLabels[this.selectedProfile] || 'Session'}</span>
+                    ${
+                        this.statusText && !this._isErrorStatus(this.statusText)
+                            ? html`<span class="status-pill ${/listening|live/i.test(this.statusText) ? 'ok' : 'busy'}">
+                                  <span class="status-dot"></span>${this.statusText}
+                              </span>`
+                            : ''
+                    }
+                    ${this._isClickThrough ? html`<span class="status-pill">click-through</span>` : ''}
                 </div>
                 <div class="live-bar-right">
-                    ${this.statusText && !this._isErrorStatus(this.statusText) ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
-                    <span class="live-bar-text">${this.getElapsedTime()}</span>
-                    ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
+                    <span class="live-bar-text timer">${this.getElapsedTime()}</span>
                     <button
                         class="win-btn session-toggle-btn ${this.sessionActive ? 'is-active' : ''}"
                         @click=${() => this.handleToggleSession()}
@@ -1364,8 +1461,6 @@ export class MetaMaxProApp extends LitElement {
                                   </svg>`
                         }
                     </button>
-                    <button class="win-btn font-btn" @click=${() => this._changeFontSize(-1)} title="Smaller text">A−</button>
-                    <button class="win-btn font-btn" @click=${() => this._changeFontSize(1)} title="Larger text">A+</button>
                     <button class="win-btn" @click=${() => this._handleMinimize()} title="Minimize to mascot">
                         <svg
                             xmlns="http://www.w3.org/2000/svg"

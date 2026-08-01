@@ -747,6 +747,24 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
+    // Live mode switch: rebuild the system prompt for the new profile WITHOUT
+    // restarting the session. Previously the footer mode selector only saved a
+    // preference for the NEXT session — mid-session it was a no-op, which made
+    // it feel like a dummy control.
+    ipcMain.handle('update-profile', async (_event, profile) => {
+        try {
+            if (!profile || typeof profile !== 'string') return { success: false, error: 'Invalid profile' };
+            S.currentProfile = profile;
+            const responseMode = await getStoredSetting('responseMode', 'standard');
+            S.currentSystemPrompt = getSystemPrompt(profile, S.currentCustomPrompt || '', responseMode);
+            console.log('[Profile] switched live to:', profile);
+            return { success: true, profile };
+        } catch (error) {
+            console.error('Error updating profile:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     // End-of-call debrief: assess the call and give the candidate next steps
     // (including a follow-up email draft). Called by the renderer after the
     // session is stopped; history survives close-session so this stays valid.

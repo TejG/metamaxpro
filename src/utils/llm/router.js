@@ -18,6 +18,7 @@ const { getRelevantResumeSections } = require('./contextFilter');
 const groqAdapter = require('./providers/groq');
 const anthropicAdapter = require('./providers/anthropic');
 const geminiAdapter = require('./providers/gemini');
+const health = require('./providers/health');
 
 // Warm up the Groq model cache once at startup so the first answer doesn't pay
 // the discovery latency. Fire-and-forget — errors are handled inside listModels.
@@ -163,6 +164,12 @@ async function routeAnswer(transcription) {
     for (const adapter of lane) {
         if (answer != null) break;
         if (!adapter.isAvailable()) continue;
+        // Circuit breaker: skip providers known to be down (quota/credit
+        // exhausted) instead of paying a failed round-trip on every question.
+        if (health.isDown(adapter.name)) {
+            console.log(`[routeAnswer] skipping ${adapter.name} (circuit open)`);
+            continue;
+        }
         answer = await withTimeout(() => adapter.streamAnswer({ reasoning, temperature }));
         if (answer == null) discardStreamUpdate();
     }
@@ -177,6 +184,20 @@ async function routeAnswer(transcription) {
     // holding the last tokens), THEN persist.
     flushStreamUpdate();
     telemetry.mark('done');
+
+    // Token-burn fix: the user turn we pushed above contains the full resume/JD
+    // context block. Keeping that in history means EVERY subsequent request
+    // resends it once per past turn (20x compounding), which exhausted Groq's
+    // daily token quota mid-session and forced slow fallbacks. Now that the
+    // answer is done, collapse the stored turn back to the bare question — each
+    // new question brings its own fresh, filtered context anyway.
+    for (let i = S.groqConversationHistory.length - 1; i >= 0; i--) {
+        const turn = S.groqConversationHistory[i];
+        if (turn.role === 'user' && turn.content.includes('[QUESTION]:')) {
+            turn.content = intent;
+            break;
+        }
+    }
 
     S.groqConversationHistory.push({ role: 'assistant', content: answer.trim() });
     if (S.groqConversationHistory.length > 20) S.groqConversationHistory = S.groqConversationHistory.slice(-20);

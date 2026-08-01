@@ -11,6 +11,7 @@ const { S, sendToRenderer, sendStreamUpdate } = require('../state');
 const telemetry = require('../telemetry');
 const { getAnthropicApiKey } = require('../../../storage');
 const { recentHistoryAsAnthropicMessages } = require('../persistence');
+const health = require('./health');
 
 const ANTHROPIC_MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'];
 
@@ -104,6 +105,11 @@ async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
         if (!response.ok) {
             const t = await response.text();
             console.error('[Anthropic] answer error:', response.status, t.slice(0, 200));
+            // Account-level failure (credit exhausted / quota): trip the circuit
+            // breaker so the cascade skips Anthropic instantly next time instead
+            // of paying this failed round-trip on every question.
+            const kind = health.classifyFailure(response.status, t);
+            if (kind) health.markDown('anthropic', kind);
             return null;
         }
 

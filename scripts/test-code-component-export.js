@@ -33,20 +33,13 @@ test('CODE_COMPONENT_PROMPT is exported', () => {
 
 const sys = prompts.getSystemPrompt('interview', '', 'standard');
 
-test('system prompt includes the CODE_COMPONENT format', () => {
-    assert(sys.includes('CODE_COMPONENT_START'));
-    assert(sys.includes('LEFT_EXPLANATION:'));
-    assert(sys.includes('RIGHT_CODE:'));
-    assert(sys.includes('CODE_COMPONENT_END'));
+test('CODE_COMPONENT markers NOT in system prompt (UI renders two-column; saves ~600 tokens/request)', () => {
+    assert(!sys.includes('CODE_COMPONENT_START'), 'prompt bloat: component block should not be injected');
 });
 
-test('component only triggers for technical questions', () => {
-    assert(/behavioral, situational, general knowledge, or non-technical/.test(sys));
-    assert(/do NOT use this component/i.test(sys));
-});
-
-test('component rules: never mix code into spoken explanation', () => {
-    assert(/Never put the code inside the spoken explanation/.test(sys));
+test('marker parser still supported if a model emits the format', () => {
+    // (kept for back-compat with any cached prompts)
+    assert(typeof prompts.CODE_COMPONENT_PROMPT === 'string');
 });
 
 test('standard mode layers still intact alongside the component', () => {
@@ -122,6 +115,25 @@ test('export works for current session (no id) and saved sessions (by id)', () =
 test('HistoryView has an export button wired to the IPC handler', () => {
     assert(historySrc.includes('exportTranscript'));
     assert(historySrc.includes("invoke('export-session-transcript'"));
+});
+
+// ── UX: no auto-scroll during streaming ──
+
+test('auto-scroll only fires when a NEW message is added', () => {
+    assert(assistantSrc.includes('_lastMsgCount'), 'message count tracking missing');
+    assert(assistantSrc.includes('isNewMessage'), 'new-message flag missing');
+    assert(!/if \(nearBottom\)/.test(assistantSrc), 'old bottom-pinning behavior still present');
+});
+
+test('new message scrolls its TOP into view (not the container bottom)', () => {
+    assert(/newest\.offsetTop/.test(assistantSrc), 'should scroll to top of the newest bubble');
+});
+
+test('message counter resets when transcript is empty', () => {
+    const idx = assistantSrc.indexOf('chat-empty">${idle}');
+    assert(idx > -1, 'empty transcript branch not found');
+    const emptyBranch = assistantSrc.slice(idx, idx + 300);
+    assert(emptyBranch.includes('_lastMsgCount = 0'));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
