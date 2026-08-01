@@ -449,6 +449,17 @@ async function routeImagesToProvider(images, prompt) {
         })),
     });
 
+    // Stash a short OCR excerpt so recordScreenTurnInHistory can label this
+    // screen exchange with its actual content — this is what lets a later
+    // screenshot (e.g. a failed test run) be recognized as a follow-up.
+    if (ocrResult.success && ocrResult.results?.length) {
+        S.lastScreenOcrExcerpt = ocrResult.results
+            .map(r => r.text || '')
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .slice(0, 400);
+    }
+
     // If OCR extracted sufficient text from all images, prepend OCR text to prompt
     // and route to text LLM instead of vision API (massive cost savings)
     if (ocrResult.success && ocrResult.allSufficient) {
@@ -493,9 +504,12 @@ async function routeImagesToProvider(images, prompt) {
                 ];
 
                 let fullText = '';
+                const looksLikeCode = require('./config').looksLikeCodingExercise(extractedTexts);
                 const textStream = await adapter.streamAnswer({
                     messages,
-                    reasoning: false,
+                    // Coding exercises need reasoning to produce code that actually
+                    // passes the judge; conversational screens stay fast.
+                    reasoning: looksLikeCode,
                     temperature: 0.2,
                 });
 

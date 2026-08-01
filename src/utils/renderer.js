@@ -259,8 +259,12 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
     try {
         if (isMacOS) {
-            // On macOS, use SystemAudioDump for audio and getDisplayMedia for screen
-            console.log('Starting macOS capture with SystemAudioDump...');
+            // On macOS, audio comes from SystemAudioDump and screenshots come
+            // from the main process via desktopCapturer (capture-screen-frame),
+            // so NO getDisplayMedia screen-share session is needed at all.
+            // This removes the screen-picker dialog, the persistent "screen is
+            // being shared" state, and the constant 1fps capture overhead.
+            console.log('Starting macOS capture with SystemAudioDump (no screen-share session)...');
 
             // Start macOS audio capture
             const audioResult = await ipcRenderer.invoke('start-macos-audio');
@@ -268,17 +272,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 throw new Error('Failed to start macOS audio capture: ' + audioResult.error);
             }
 
-            // Get screen capture for screenshots
-            mediaStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    frameRate: 1,
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
-                },
-                audio: false, // Don't use browser audio on macOS
-            });
-
-            console.log('macOS screen capture started - audio handled by SystemAudioDump');
+            console.log('macOS capture started — audio via SystemAudioDump, screenshots via desktopCapturer');
             if (audioMode === 'mic_only' || audioMode === 'both') {
                 let micStream = null;
                 try {
@@ -682,7 +676,14 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
 
 const MANUAL_SCREENSHOT_PROMPT = `You are prepping ME to answer this live during a technical interview. Analyze the attached screenshot(s).
 
-First, read ALL screenshots carefully to understand the full problem, constraints, examples, and edge cases. Identify the programming language from any language selector, code template, or context clues.
+FIRST — CHECK IF THIS IS A FOLLOW-UP TO A PREVIOUS ANSWER:
+Look at the conversation history. If a solution/answer was already given earlier in this session AND the screenshot shows any of: a failing test case, "Wrong Answer", expected vs actual output mismatch, a stack trace, a compile/runtime error, a red ✗, or judge feedback — this is a DEBUG follow-up about the PREVIOUS answer, not a new problem. In that case:
+- Read the exact error/failing input/expected-vs-actual shown on screen.
+- Diagnose precisely why the previous code produced that result — trace the failing input through the previous code step by step until you find the exact line/logic that breaks.
+- Produce a CORRECTED complete solution in the same "Type this:" format below. Do NOT output the same code again. If you cannot find a concrete bug that explains the shown failure, rethink the algorithm from scratch instead of patching.
+- Start the spoken lines with one backticked sentence acknowledging the fix, e.g. \`I see — my loop missed the single-element case; here's the fix.\`
+
+Otherwise, read ALL screenshots carefully to understand the full problem, constraints, examples, and edge cases. Identify the programming language from any language selector, code template, or context clues.
 
 If the screenshot is a coding problem, respond in EXACTLY this format and NOTHING else:
 
@@ -717,6 +718,8 @@ Hard rules:
 - Spoken lines must be short, natural, first-person — what a confident candidate actually says, not an essay.
 - Do NOT use "Approach:", "Explanation:", "Language:" headers or any long prose. Do NOT restate the problem.
 - The code must be correct and runnable.
+- MANDATORY VERIFICATION before you output the code: mentally execute your solution against EVERY example shown on screen, line by line, tracking variable values. If any example produces the wrong output, fix the code and re-trace. Also trace at least one edge case (empty input, single element, duplicates, negative numbers, max constraint — whichever applies). Only output code that passes your trace. Never output code you have not traced.
+- Watch for the classic killers: off-by-one in loop bounds, integer division vs float, mutating a list while iterating, wrong base case in recursion, forgetting to handle the empty/None input, comparing references instead of values, and 0-indexed vs 1-indexed answers.
 
 If the screenshot is an APTITUDE / QUANTITATIVE / LOGICAL-REASONING / MULTIPLE-CHOICE question (arithmetic or word problem, percentages, ratios, profit/loss, time-speed-distance, time-and-work, probability, permutations/combinations, number series, data interpretation, syllogisms, blood relations, seating arrangement, pattern/analogy, etc.), IGNORE both formats above. These have exactly ONE correct answer, so:
 - Work the actual computation step by step — set up the relationship, substitute the real numbers shown on screen, and carry out the arithmetic. Do NOT estimate, pattern-match to a similar problem, or pick an option and rationalize backward.
@@ -732,9 +735,20 @@ If the screenshot is NOT a coding problem and NOT an aptitude/reasoning question
 - If the screen shows a question directed at me, answer it directly first, then add one or two supporting details.
 `;
 
-// Shared helper: initialise video+canvas and return a base64 JPEG frame
+// Shared helper: initialise video+canvas and return a base64 JPEG frame.
+// When no live screen-share stream exists (macOS, or a failed share), fall
+// back to a main-process desktopCapturer snapshot via IPC.
 async function _captureFrameAsBase64(quality = 'medium') {
-    if (!mediaStream) return null;
+    if (!mediaStream) {
+        try {
+            const res = await ipcRenderer.invoke('capture-screen-frame', quality);
+            if (res && res.success) return res.data;
+            console.error('Main-process screen capture failed:', res && res.error);
+        } catch (e) {
+            console.error('capture-screen-frame IPC failed:', e);
+        }
+        return null;
+    }
 
     if (!hiddenVideo) {
         hiddenVideo = document.createElement('video');
@@ -793,11 +807,8 @@ async function _captureFrameAsBase64(quality = 'medium') {
 
 async function captureManualScreenshot(imageQuality = null) {
     console.log('Manual screenshot triggered');
-    if (!mediaStream) {
-        console.error('No media stream available');
-        return;
-    }
-
+    // No mediaStream guard: _captureFrameAsBase64 falls back to the
+    // main-process desktopCapturer when there is no live screen-share stream.
     const b64 = await _captureFrameAsBase64(imageQuality || currentImageQuality);
     if (!b64) {
         console.error('Failed to capture frame');
@@ -819,10 +830,6 @@ async function captureManualScreenshot(imageQuality = null) {
 
 // Capture a screenshot into the buffer (for multi-screenshot coding exercise flow)
 async function captureScreenshotToBuffer(imageQuality = null) {
-    if (!mediaStream) {
-        console.error('No media stream available');
-        return capturedScreenshots.length;
-    }
     const b64 = await _captureFrameAsBase64(imageQuality || currentImageQuality);
     if (b64) {
         capturedScreenshots.push(b64);

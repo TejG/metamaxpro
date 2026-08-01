@@ -101,27 +101,27 @@ async function runTests() {
     // ────────────────────────────────────────────────────────────────────
 
     await test('isOcrSufficient decision logic', async () => {
-        // Case 1: High confidence, sufficient text
+        // Case 1: High confidence, substantial real text (20+ word-like tokens, 200+ chars)
         const good = {
             success: true,
-            text: 'This is a clear text with enough content for OCR',
-            confidence: 85,
+            text: 'This is a clear block of extracted text with enough real words to be considered a genuinely text-heavy screenshot. '.repeat(3),
+            confidence: 90,
         };
-        assert(isOcrSufficient(good), 'Should accept high-confidence result');
+        assert(isOcrSufficient(good), 'Should accept high-confidence substantial text');
 
         // Case 2: Low confidence
         const lowConfidence = {
             success: true,
-            text: 'Some text here',
+            text: 'Some readable text here that is long enough to pass the length check when repeated a few times over. '.repeat(3),
             confidence: 50,
         };
         assert(!isOcrSufficient(lowConfidence), `Should reject confidence <${OCR_CONFIDENCE_THRESHOLD}%`);
 
-        // Case 3: Too short
+        // Case 3: Too short (UI fragments like menu labels must NOT pass)
         const tooShort = {
             success: true,
-            text: 'Hi',
-            confidence: 90,
+            text: 'File Edit View Help',
+            confidence: 95,
         };
         assert(!isOcrSufficient(tooShort), `Should reject text <${OCR_MIN_TEXT_LENGTH} chars`);
 
@@ -132,7 +132,15 @@ async function runTests() {
         };
         assert(!isOcrSufficient(failed), 'Should reject failed OCR');
 
-        console.log(`   Thresholds: ${OCR_CONFIDENCE_THRESHOLD}% confidence, ${OCR_MIN_TEXT_LENGTH} chars minimum`);
+        // Case 5: Long but garbage tokens (OCR noise from graphical UI)
+        const garbage = {
+            success: true,
+            text: ('~| }{ <> @# %^ &* ][ =+ ¦§ ±µ ÷× '.repeat(10)),
+            confidence: 90,
+        };
+        assert(!isOcrSufficient(garbage), 'Should reject non-word OCR noise');
+
+        console.log(`   Thresholds: ${OCR_CONFIDENCE_THRESHOLD}% confidence, ${OCR_MIN_TEXT_LENGTH} chars minimum, word-ratio check`);
     });
 
     // ────────────────────────────────────────────────────────────────────

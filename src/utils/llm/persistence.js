@@ -181,10 +181,18 @@ function recentHistoryAsGeminiContents(maxTurns = 8) {
 }
 
 // Record a screenshot exchange in the shared conversation history so subsequent
-// audio answers stay aware of what was shown/answered on screen.
+// audio answers stay aware of what was shown/answered on screen. Includes an
+// OCR excerpt of the screen content (when available, stashed by the vision
+// router on S.lastScreenOcrExcerpt) so a later screenshot showing a failed
+// run/test can be recognized as a follow-up to THIS exchange.
 function recordScreenTurnInHistory(answer) {
     if (!answer || !answer.trim()) return;
-    S.groqConversationHistory.push({ role: 'user', content: '(I shared my screen and asked for help with what was shown.)' });
+    const excerpt = (S.lastScreenOcrExcerpt || '').trim();
+    const userContent = excerpt
+        ? `(I shared a screenshot. On-screen content excerpt: "${excerpt.slice(0, 400)}")`
+        : '(I shared my screen and asked for help with what was shown.)';
+    S.lastScreenOcrExcerpt = null;
+    S.groqConversationHistory.push({ role: 'user', content: userContent });
     S.groqConversationHistory.push({ role: 'assistant', content: answer.trim() });
     if (S.groqConversationHistory.length > 20) {
         S.groqConversationHistory = S.groqConversationHistory.slice(-20);

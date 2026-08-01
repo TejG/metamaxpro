@@ -843,6 +843,12 @@ export class MetaMaxProApp extends LitElement {
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
             await ipcRenderer.invoke('close-session');
+            // Generate the end-of-call debrief (feedback + next steps + follow-up
+            // email draft). Fire-and-forget: result streams into the assistant
+            // view via the normal response channel.
+            ipcRenderer.invoke('generate-call-debrief').then(res => {
+                if (res && !res.success) console.log('[Debrief] skipped:', res.error);
+            });
         }
         this.sessionActive = false;
         this._stopTimer();

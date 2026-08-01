@@ -9,8 +9,9 @@ const { createWorker } = require('tesseract.js');
 // OCR result cache: { [imageHash]: { text, confidence, timestamp } }
 const ocrCache = new Map();
 const OCR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const OCR_CONFIDENCE_THRESHOLD = 70; // Use OCR if confidence >= 70%
-const OCR_MIN_TEXT_LENGTH = 10; // Minimum text length to consider OCR successful
+const OCR_CONFIDENCE_THRESHOLD = 85; // Use OCR only if confidence >= 85% (below this, junk text slipped through)
+const OCR_MIN_TEXT_LENGTH = 200; // Must extract a substantial block of text — short fragments (menu labels, window chrome) are NOT a text-heavy screenshot
+const OCR_MIN_WORD_RATIO = 0.7; // At least 70% of extracted tokens must look like real words
 
 let worker = null;
 let workerInitializing = false;
@@ -161,6 +162,16 @@ function isOcrSufficient(ocrResult) {
     if (!ocrResult.success) return false;
     if (!ocrResult.text || ocrResult.text.length < OCR_MIN_TEXT_LENGTH) return false;
     if (ocrResult.confidence < OCR_CONFIDENCE_THRESHOLD) return false;
+
+    // Sanity check: most extracted tokens should look like real words.
+    // OCR of graphical UIs produces fragments like "x O @ # |] {" that used to
+    // pass the old length/confidence check and starve the LLM of the actual
+    // image, producing generic "I'm ready to help" answers.
+    const tokens = ocrResult.text.split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length < 20) return false; // too few words to be a text-heavy screen
+    const wordLike = tokens.filter(t => /^[A-Za-z0-9][A-Za-z0-9.,;:!?'"()\-_/]*$/.test(t)).length;
+    if (wordLike / tokens.length < OCR_MIN_WORD_RATIO) return false;
+
     return true;
 }
 

@@ -86,10 +86,11 @@ function buildImageModelFallbacks(preferred) {
 // thinkingBudget: 0. This restores sub-2s time-to-first-token.
 const GEMINI_NO_THINKING = { thinkingConfig: { thinkingBudget: 0 } };
 // Reasoning-enabled Gemini config for questions that must be WORKED OUT
-// (aptitude, quantitative, logic, multiple-choice). thinkingBudget > 0 lets the
-// model reason internally before answering — the single biggest lever for
-// getting these right. Bounded (not dynamic -1) so latency stays predictable.
-const GEMINI_THINKING = { thinkingConfig: { thinkingBudget: 2048 } };
+// (aptitude, quantitative, logic, multiple-choice, coding challenges). A
+// higher budget gives the model room to trace its code against the on-screen
+// examples before answering — the single biggest lever for producing code
+// that actually passes the judge instead of failing at runtime.
+const GEMINI_THINKING = { thinkingConfig: { thinkingBudget: 4096 } };
 
 // ── Adaptive answer effort ──────────────────────────────────────────
 // Decide whether a question must be WORKED OUT (one correct numeric/logical

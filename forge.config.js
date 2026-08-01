@@ -8,6 +8,35 @@ module.exports = {
         },
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'MetaQuest',
+        // Keep the packaged app lean: exclude dev/test/docs artifacts that
+        // ballooned app size. node_modules is handled by forge's pruning,
+        // plus targeted rules below for oversized optional payloads:
+        // - onnxruntime-web (91MB): transformers.js pulls it in, but Electron
+        //   main always uses the onnxruntime-node backend.
+        // - onnxruntime-node binaries for OTHER platforms (~140MB): each
+        //   platform build only needs its own napi binary.
+        // - tesseract.js-core non-LSTM wasm variants (~20MB): node worker
+        //   only ever loads the (relaxed)simd-lstm builds.
+        ignore: (() => {
+            const platform = process.platform; // darwin | win32 | linux
+            const otherPlatforms = ['darwin', 'win32', 'linux'].filter(p => p !== platform);
+            return [
+                /^\/scripts($|\/)/,
+                /^\/memory($|\/)/,
+                /^\/\.git($|\/)/,
+                /^\/\.vscode($|\/)/,
+                /\.md$/i,
+                /^\/eng\.traineddata$/, // tesseract downloads its own language data at runtime
+                /^\/entitlements\.plist$/,
+                /\.(bak|tmp|log)$/i,
+                /^\/node_modules\/onnxruntime-web($|\/)/,
+                ...otherPlatforms.map(p => new RegExp(`^/node_modules/onnxruntime-node/bin/napi-v3/${p}($|/)`)),
+                // Drop tesseract core variants the node worker never loads
+                // (keeps tesseract-core-simd-lstm* and tesseract-core-relaxedsimd-lstm*).
+                /^\/node_modules\/tesseract\.js-core\/tesseract-core(-simd|-relaxedsimd)?\.wasm(\.js)?$/,
+                /^\/node_modules\/tesseract\.js-core\/tesseract-core-lstm\.wasm(\.js)?$/,
+            ];
+        })(),
     icon: 'src/assets/logo',
     // Stable bundle identifier — TCC (mic / screen recording) keys permissions
     // off this, so it must be set and constant across releases.

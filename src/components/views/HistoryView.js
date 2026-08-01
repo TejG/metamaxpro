@@ -332,6 +332,21 @@ export class HistoryView extends LitElement {
         this.activeTab = 'transcript';
     }
 
+    async exportTranscript() {
+        if (!this.selectedSessionId || !window.require) return;
+        try {
+            const { ipcRenderer } = window.require('electron');
+            const res = await ipcRenderer.invoke('export-session-transcript', this.selectedSessionId);
+            if (res && res.success) {
+                console.log('Transcript exported to', res.filePath);
+            } else if (res && res.error && res.error !== 'Export cancelled') {
+                console.error('Export failed:', res.error);
+            }
+        } catch (e) {
+            console.error('Export failed:', e);
+        }
+    }
+
     handleSearchInput(e) {
         this.searchQuery = e.target.value;
     }
@@ -554,6 +569,22 @@ export class HistoryView extends LitElement {
                     >${this._getProfileLabel(this.selectedSession)} · ${this.formatDate(this.selectedSession.createdAt)} ·
                     ${this.formatTime(this.selectedSession.createdAt)}</span
                 >
+                <button class="back-btn" style="margin-left:auto" title="Export transcript as Markdown" @click=${this.exportTranscript}>
+                    <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                </button>
             </div>
             <div class="tab-row">
                 <button

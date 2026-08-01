@@ -69,6 +69,75 @@ export class AssistantView extends LitElement {
             color: #f14c4c;
             white-space: pre-wrap;
         }
+        /* Per-response copy button (whole answer) */
+        .chat-msg.answer {
+            position: relative;
+        }
+        .msg-copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            padding: 2px 8px;
+            font-size: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--bg-surface, rgba(0, 0, 0, 0.35));
+            color: var(--text-muted);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            z-index: 2;
+        }
+        .chat-msg.answer:hover .msg-copy-btn {
+            opacity: 1;
+        }
+        .msg-copy-btn.copied {
+            color: #4ade80;
+            border-color: #4ade80;
+        }
+        /* Two-column CODE / SYSTEM DESIGN component */
+        .code-component {
+            display: flex;
+            gap: 10px;
+            margin: 6px 0;
+            width: 100%;
+        }
+        .code-component .cc-left,
+        .code-component .cc-right {
+            flex: 1 1 50%;
+            min-width: 0;
+            position: relative;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: var(--bg-surface, var(--bg-elevated));
+        }
+        .code-component .cc-left {
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+        .code-component .cc-right pre {
+            margin: 0;
+            max-height: 420px;
+            overflow: auto;
+        }
+        .code-component .cc-label {
+            display: block;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .chat-msg.answer:has(.code-component) {
+            max-width: 100%;
+            width: 100%;
+        }
+        @media (max-width: 700px) {
+            .code-component {
+                flex-direction: column;
+            }
+        }
         .chat-empty {
             color: var(--text-muted);
             font-size: var(--font-size-sm, 13px);
@@ -745,6 +814,13 @@ export class AssistantView extends LitElement {
     }
 
     renderMarkdown(content) {
+        // Two-column CODE / SYSTEM DESIGN component: the LLM emits a strict
+        // marker format for technical questions; render it as a side-by-side
+        // layout (spoken explanation left, copyable code right).
+        if (content && content.includes('CODE_COMPONENT_START')) {
+            const html = this._renderCodeComponent(content);
+            if (html) return html;
+        }
         if (typeof window !== 'undefined' && window.marked) {
             try {
                 window.marked.setOptions({
@@ -765,13 +841,87 @@ export class AssistantView extends LitElement {
                     const encoded = btoa(unescape(encodeURIComponent(decoded)));
                     return `<div class="mermaid" data-code="${encoded}"></div>`;
                 });
-                return rendered;
+                // Deterministic two-column layout: ANY answer with a code
+                // block + meaningful prose renders side-by-side (explanation
+                // left, code right) — not dependent on the model emitting
+                // CODE_COMPONENT markers.
+                return this._maybeTwoColumn(rendered);
             } catch (error) {
                 console.warn('Error parsing markdown:', error);
                 return content;
             }
         }
         return content;
+    }
+
+    // Restructure rendered HTML into the two-column code component whenever it
+    // contains at least one <pre> code block AND enough prose to be worth
+    // splitting. Code-only or prose-only answers render unchanged.
+    _maybeTwoColumn(html) {
+        try {
+            if (!html || !html.includes('<pre')) return html;
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const pres = Array.from(doc.body.querySelectorAll('pre'));
+            if (!pres.length) return html;
+
+            // Measure prose without the code blocks.
+            const proseProbe = doc.body.cloneNode(true);
+            proseProbe.querySelectorAll('pre').forEach(p => p.remove());
+            const proseText = (proseProbe.textContent || '').trim();
+            if (proseText.length < 40) return html; // essentially code-only
+
+            const rightHtml = pres.map(p => p.outerHTML).join('');
+            pres.forEach(p => p.remove());
+            const leftHtml = doc.body.innerHTML;
+
+            return (
+                `<div class="code-component">` +
+                `<div class="cc-left"><span class="cc-label">Say this</span>${leftHtml}</div>` +
+                `<div class="cc-right"><span class="cc-label">code</span>${rightHtml}</div>` +
+                `</div>`
+            );
+        } catch (e) {
+            console.warn('Two-column restructure failed:', e);
+            return html;
+        }
+    }
+
+    // Parse the strict CODE_COMPONENT marker format into a two-column layout.
+    // Returns null if the markers are malformed/incomplete (e.g. mid-stream),
+    // in which case the caller falls back to plain markdown rendering.
+    _renderCodeComponent(content) {
+        try {
+            const m = content.match(/CODE_COMPONENT_START([\s\S]*?)CODE_COMPONENT_END/);
+            if (!m) return null;
+            const inner = m[1];
+
+            const leftMatch = inner.match(/LEFT_EXPLANATION:\s*([\s\S]*?)(?=RIGHT_CODE:)/);
+            const rightMatch = inner.match(/RIGHT_CODE:\s*([\s\S]*?)(?=COPYABLE:|CODE_COMPONENT_END|$)/);
+            if (!leftMatch || !rightMatch) return null;
+
+            const langMatch = inner.match(/LANGUAGE:\s*([^\n]+)/);
+            const language = langMatch ? langMatch[1].trim().replace(/["'\[\]]/g, '') : '';
+
+            const md = t => (window.marked ? window.marked.parse(t) : t);
+            const leftHtml = md(leftMatch[1].trim());
+            const rightHtml = md(rightMatch[1].trim());
+
+            // Anything before/after the component (rare) renders as normal markdown.
+            const before = content.slice(0, m.index).trim();
+            const after = content.slice(m.index + m[0].length).trim();
+
+            return [
+                before ? md(before) : '',
+                `<div class="code-component">`,
+                `<div class="cc-left"><span class="cc-label">Say this</span>${leftHtml}</div>`,
+                `<div class="cc-right"><span class="cc-label">${language || 'code'}</span>${rightHtml}</div>`,
+                `</div>`,
+                after ? md(after) : '',
+            ].join('');
+        } catch (e) {
+            console.warn('Code component parse failed:', e);
+            return null;
+        }
     }
 
     wrapWordsInSpans(html) {
@@ -1322,7 +1472,7 @@ export class AssistantView extends LitElement {
 
     _attachCopyButtons(container) {
         // Remove existing buttons first
-        const existing = container.querySelectorAll('.code-copy-btn');
+        const existing = container.querySelectorAll('.code-copy-btn, .msg-copy-btn');
         existing.forEach(b => b.remove());
 
         const pres = container.querySelectorAll('pre');
@@ -1338,6 +1488,66 @@ export class AssistantView extends LitElement {
             });
             pre.appendChild(btn);
         });
+
+        // Per-response copy button: copies the whole answer as plain text.
+        const answers = container.querySelectorAll('.chat-msg.answer:not(.error)');
+        answers.forEach(msg => {
+            const btn = document.createElement('button');
+            btn.className = 'msg-copy-btn';
+            btn.type = 'button';
+            btn.textContent = 'Copy';
+            btn.title = 'Copy this response';
+            btn.addEventListener('click', async e => {
+                e.stopPropagation();
+                const clone = msg.cloneNode(true);
+                clone.querySelectorAll('.msg-copy-btn, .code-copy-btn').forEach(b => b.remove());
+                await this._copyText((clone.textContent || '').trim(), btn);
+            });
+            msg.appendChild(btn);
+        });
+
+        // Copy button for the spoken-explanation column of a code component.
+        const ccLefts = container.querySelectorAll('.code-component .cc-left');
+        ccLefts.forEach(left => {
+            const btn = document.createElement('button');
+            btn.className = 'msg-copy-btn';
+            btn.type = 'button';
+            btn.textContent = 'Copy';
+            btn.title = 'Copy explanation';
+            btn.style.opacity = '1';
+            btn.addEventListener('click', async e => {
+                e.stopPropagation();
+                const clone = left.cloneNode(true);
+                clone.querySelectorAll('.msg-copy-btn, .cc-label').forEach(b => b.remove());
+                await this._copyText((clone.textContent || '').trim(), btn);
+            });
+            left.appendChild(btn);
+        });
+    }
+
+    async _copyText(text, btn) {
+        try {
+            if (window && window.require) {
+                try {
+                    const { clipboard } = window.require('electron');
+                    clipboard.writeText(text);
+                } catch (e) {
+                    await navigator.clipboard.writeText(text);
+                }
+            } else {
+                await navigator.clipboard.writeText(text);
+            }
+            btn.classList.add('copied');
+            btn.textContent = 'Copied';
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.textContent = 'Copy';
+            }, 1200);
+        } catch (e) {
+            console.warn('Copy failed:', e);
+            btn.textContent = 'Error';
+            setTimeout(() => (btn.textContent = 'Copy'), 1200);
+        }
     }
 
     async _copyPreContent(pre, btn) {

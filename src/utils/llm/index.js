@@ -99,8 +99,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     // Get enabled tools first to determine Google Search status
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
+    void googleSearchEnabled; // used only for the live tools config below
 
-    const systemPrompt = getSystemPrompt(profile, customPrompt, googleSearchEnabled);
+    // Third arg is the RESPONSE MODE ('instant' | 'standard' | 'deep' | 'hint'),
+    // NOT the google-search flag — passing a boolean here silently fell back to
+    // 'standard', forcing the verbose three-block format on every answer.
+    // Default is 'standard': the layered SAY THIS / SHORT VERSION / depth format.
+    const responseMode = await getStoredSetting('responseMode', 'standard');
+    const systemPrompt = getSystemPrompt(profile, customPrompt, responseMode);
     S.currentSystemPrompt = systemPrompt; // Store for the answer providers
 
     // Initialize new conversation session only on first connect
@@ -124,11 +130,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
             // Handle input transcription (what was spoken). Each chunk resets the
             // silence timer — the answer fires shortly after the user stops speaking.
             if (message.serverContent?.inputTranscription?.results) {
-                S.currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
+                const formatted = formatSpeakerResults(message.serverContent.inputTranscription.results);
+                if (process.env.DEBUG_TRANSCRIPT) console.log('[Transcript/diarized]', JSON.stringify(formatted));
+                S.currentTranscription += formatted;
                 scheduleGroqTrigger();
             } else if (message.serverContent?.inputTranscription?.text) {
                 const text = message.serverContent.inputTranscription.text;
                 if (text.trim() !== '') {
+                    if (process.env.DEBUG_TRANSCRIPT) console.log('[Transcript/raw]', JSON.stringify(text));
                     S.currentTranscription += text;
                     scheduleGroqTrigger();
                 }
@@ -168,10 +177,12 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         proactivity: { proactiveAudio: true },
         outputAudioTranscription: {},
         tools: enabledTools,
-        // Enable speaker diarization
+        // Speaker diarization: allow 1–2 speakers. Forcing exactly 2 made the
+        // model split a single speaker's audio into two phantom speakers,
+        // fragmenting/mislabeling the transcript ("random things" bug).
         inputAudioTranscription: {
             enableSpeakerDiarization: true,
-            minSpeakerCount: 2,
+            minSpeakerCount: 1,
             maxSpeakerCount: 2,
         },
         contextWindowCompression: { slidingWindow: {} },
@@ -391,7 +402,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         S.lastProcessedIntent = null; // fresh session: allow re-asking earlier questions
 
         S.currentProviderMode = 'whisper';
-        const systemPrompt = getSystemPrompt(profile, customPrompt, false);
+        const whisperResponseMode = await getStoredSetting('responseMode', 'standard');
+        const systemPrompt = getSystemPrompt(profile, customPrompt, whisperResponseMode);
         S.currentSystemPrompt = systemPrompt;
         initializeNewSession(profile, customPrompt);
         S.sessionReadyAt = Date.now(); // no Gemini startup noise — warmup not needed
@@ -413,7 +425,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('initialize-anthropic', async (_event, customPrompt, profile = 'interview') => {
         S.currentProviderMode = 'anthropic';
-        const systemPrompt = getSystemPrompt(profile, customPrompt, false);
+        const anthropicResponseMode = await getStoredSetting('responseMode', 'standard');
+        const systemPrompt = getSystemPrompt(profile, customPrompt, anthropicResponseMode);
         S.currentSystemPrompt = systemPrompt;
         initializeNewSession(profile, customPrompt);
         S.sessionReadyAt = Date.now();
@@ -450,12 +463,29 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
+        // Whisper/Anthropic modes: route renderer-captured audio (Windows/Linux
+        // getDisplayMedia loopback) into the whisper VAD pipeline. Without this
+        // branch, Windows system audio was silently dropped in these modes —
+        // audio.js only feeds whisper from the macOS SystemAudioDump helper.
+        if (S.currentProviderMode === 'whisper' || S.currentProviderMode === 'anthropic') {
+            try {
+                const { processAudioChunk } = require('../whisper');
+                const pcmBuffer = Buffer.from(data, 'base64');
+                processAudioChunk(pcmBuffer);
+                return { success: true };
+            } catch (error) {
+                console.error('Error sending whisper audio:', error);
+                return { success: false, error: error.message };
+            }
+        }
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
         try {
             process.stdout.write('.');
             await geminiSessionRef.current.sendRealtimeInput({
                 audio: { data: data, mimeType: mimeType },
             });
+            // Track activity to prevent keepalive from firing unnecessarily
+            S.lastActivityTimestamp = Date.now();
             return { success: true };
         } catch (error) {
             console.error('Error sending system audio:', error);
@@ -485,12 +515,25 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: error.message };
             }
         }
+        // Whisper/Anthropic modes: mic audio also goes to whisper VAD
+        if (S.currentProviderMode === 'whisper' || S.currentProviderMode === 'anthropic') {
+            try {
+                const { processAudioChunk } = require('../whisper');
+                const pcmBuffer = Buffer.from(data, 'base64');
+                processAudioChunk(pcmBuffer);
+                return { success: true };
+            } catch (error) {
+                console.error('Error sending whisper mic audio:', error);
+                return { success: false, error: error.message };
+            }
+        }
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
         try {
             process.stdout.write(',');
             await geminiSessionRef.current.sendRealtimeInput({
                 audio: { data: data, mimeType: mimeType },
             });
+            S.lastActivityTimestamp = Date.now();
             return { success: true };
         } catch (error) {
             console.error('Error sending mic audio:', error);
@@ -700,6 +743,81 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             return { success: true, sessionId: S.currentSessionId };
         } catch (error) {
             console.error('Error starting new session:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // End-of-call debrief: assess the call and give the candidate next steps
+    // (including a follow-up email draft). Called by the renderer after the
+    // session is stopped; history survives close-session so this stays valid.
+    ipcMain.handle('generate-call-debrief', async _event => {
+        try {
+            const { generateCallDebrief } = require('./debrief');
+            return await generateCallDebrief();
+        } catch (error) {
+            console.error('Error generating call debrief:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Export a session transcript (current session by default, or a saved one
+    // by id) as a Markdown file via a native save dialog.
+    ipcMain.handle('export-session-transcript', async (_event, sessionId = null) => {
+        try {
+            const { dialog, BrowserWindow } = require('electron');
+            const fs = require('fs');
+            const { getSession } = require('../../storage');
+
+            let session = null;
+            let id = sessionId;
+            if (sessionId) {
+                session = getSession(sessionId);
+            } else {
+                id = S.currentSessionId;
+                session = {
+                    conversationHistory: S.conversationHistory || [],
+                    screenAnalysisHistory: S.screenAnalysisHistory || [],
+                    profile: S.currentProfile,
+                };
+            }
+            const turns = (session && session.conversationHistory) || [];
+            const screens = (session && session.screenAnalysisHistory) || [];
+            if (!turns.length && !screens.length) {
+                return { success: false, error: 'No transcript to export for this session.' };
+            }
+
+            const fmt = ts => (ts ? new Date(ts).toLocaleString() : '');
+            const lines = [`# Call Transcript`, ``, `Session: ${id || 'current'}`, `Exported: ${new Date().toLocaleString()}`, ``];
+            if (turns.length) {
+                lines.push(`## Conversation`, ``);
+                turns.forEach(t => {
+                    lines.push(`**Interviewer** (${fmt(t.timestamp)}):`, t.transcription || '', '');
+                    lines.push(`**Answer**:`, t.ai_response || '', '');
+                });
+            }
+            if (screens.length) {
+                lines.push(`## Screen Analyses`, ``);
+                screens.forEach((s2, i) => {
+                    lines.push(`### Screenshot ${i + 1} (${fmt(s2.timestamp)}) — ${s2.model || ''}`, '', s2.response || '', '');
+                });
+            }
+            const md = lines.join('\n');
+
+            const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+            const { canceled, filePath } = await dialog.showSaveDialog(win, {
+                title: 'Export Transcript',
+                defaultPath: `transcript-${id || Date.now()}.md`,
+                filters: [
+                    { name: 'Markdown', extensions: ['md'] },
+                    { name: 'Text', extensions: ['txt'] },
+                ],
+            });
+            if (canceled || !filePath) return { success: false, error: 'Export cancelled' };
+            fs.writeFileSync(filePath, md, 'utf8');
+            console.log('[Export] Transcript written to', filePath);
+            return { success: true, filePath };
+        } catch (error) {
+            console.error('Error exporting transcript:', error);
             return { success: false, error: error.message };
         }
     });

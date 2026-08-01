@@ -322,6 +322,34 @@ function setupGeneralIpcHandlers() {
         return app.getVersion();
     });
 
+    // On-demand screen frame capture via desktopCapturer — no persistent
+    // getDisplayMedia screen-share session needed. Used on macOS (where system
+    // audio comes from SystemAudioDump, so the screen-share stream was pure
+    // overhead) and as a fallback anywhere the live stream is unavailable.
+    // Returns a base64 JPEG of the primary display.
+    ipcMain.handle('capture-screen-frame', async (_event, quality = 'medium') => {
+        try {
+            const { desktopCapturer, screen } = require('electron');
+            const primary = screen.getPrimaryDisplay();
+            const { width, height } = primary.size;
+            const scale = width > 1600 ? 1600 / width : 1;
+            const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: Math.round(width * scale), height: Math.round(height * scale) },
+            });
+            if (!sources.length) return { success: false, error: 'No screen sources available' };
+            // Prefer the primary display's source when identifiable.
+            const source = sources.find(s => s.display_id === String(primary.id)) || sources[0];
+            const jpegQuality = quality === 'high' ? 90 : quality === 'low' ? 50 : 75;
+            const buf = source.thumbnail.toJPEG(jpegQuality);
+            if (!buf || buf.length < 1000) return { success: false, error: 'Captured frame was empty' };
+            return { success: true, data: buf.toString('base64') };
+        } catch (error) {
+            console.error('[Screenshot] desktopCapturer capture failed:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('quit-application', async event => {
         try {
             stopMacOSAudioCapture();
