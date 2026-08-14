@@ -51,7 +51,7 @@ function isAvailable() {
     return !!(key && key.trim());
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages = null } = {}) {
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) return null;
 
@@ -76,7 +76,10 @@ async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
         .filter(m => known.size === 0 || known.has(m))
         .slice(0, 3);
 
-    const trimmed = trimConversationHistoryForGemma(S.groqConversationHistory, 12000);
+    // `messages` lets a caller answer something other than the running audio
+    // conversation (the screenshot OCR path passes the extracted screen text).
+    // Without it the answer silently ignores whatever the caller asked about.
+    const trimmed = messages && messages.length ? messages : trimConversationHistoryForGemma(S.groqConversationHistory, 12000);
 
     try {
         let response = null;

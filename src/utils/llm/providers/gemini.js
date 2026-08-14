@@ -28,11 +28,15 @@ async function listModels() {
     return GEMINI_TEXT_MODELS;
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null } = {}) {
     const apiKey = getApiKey();
     if (!apiKey) return null;
 
-    const trimmed = trimConversationHistoryForGemma(S.groqConversationHistory, 42000);
+    // `messages` lets a caller answer something other than the running audio
+    // conversation (the screenshot OCR path passes the extracted screen text).
+    // Without it the answer silently ignores whatever the caller asked about.
+    const trimmed =
+        overrideMessages && overrideMessages.length ? overrideMessages : trimConversationHistoryForGemma(S.groqConversationHistory, 42000);
 
     try {
         const ai = new GoogleGenAI({ apiKey });

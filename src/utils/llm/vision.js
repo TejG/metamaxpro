@@ -496,16 +496,14 @@ async function routeImagesToProvider(images, prompt) {
                     recentHistory = recentHistory.slice(0, -1);
                 }
                 
-                // Build the final message sequence
-                const messages = [
-                    { role: 'system', content: S.currentSystemPrompt || 'You are a helpful assistant.' },
-                    ...recentHistory,
-                    { role: 'user', content: enhancedPrompt },
-                ];
+                // Build the final message sequence. Each adapter supplies its own
+                // system prompt, so pass conversation turns only.
+                const messages = [...recentHistory, { role: 'user', content: enhancedPrompt }];
 
-                let fullText = '';
                 const looksLikeCode = require('./config').looksLikeCodingExercise(extractedTexts);
-                const textStream = await adapter.streamAnswer({
+                // streamAnswer pushes tokens to the renderer itself and resolves
+                // to the COMPLETE answer text — it is not an async iterable.
+                const fullText = await adapter.streamAnswer({
                     messages,
                     // Coding exercises need reasoning to produce code that actually
                     // passes the judge; conversational screens stay fast.
@@ -513,13 +511,7 @@ async function routeImagesToProvider(images, prompt) {
                     temperature: 0.2,
                 });
 
-                if (textStream) {
-                    for await (const chunk of textStream) {
-                        if (chunk) {
-                            fullText += chunk;
-                            sendStreamUpdate(fullText);
-                        }
-                    }
+                if (fullText) {
                     flushStreamUpdate();
                     saveScreenAnalysis(prompt, fullText, `ocr+${name.toLowerCase()}`);
                     recordScreenTurnInHistory(fullText);
@@ -533,7 +525,11 @@ async function routeImagesToProvider(images, prompt) {
                         costSavings: '~60% (vision → text LLM)',
                     };
                 }
+                // Drop any partial this provider streamed so it can't bleed into
+                // the next provider's answer.
+                discardStreamUpdate();
             } catch (error) {
+                discardStreamUpdate();
                 console.log(`[Vision/OCR] ${name} text LLM failed:`, error.message);
             }
         }

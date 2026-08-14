@@ -60,7 +60,7 @@ async function fetchWithAnthropicRetry(url, options, label = 'Anthropic', maxRet
     return null;
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null } = {}) {
     const key = getAnthropicApiKey();
     if (!key) return null;
 
@@ -69,7 +69,10 @@ async function streamAnswer({ reasoning = false, temperature = 0.4 } = {}) {
         S.currentGroqAbortController = null;
     }
 
-    const messages = recentHistoryAsAnthropicMessages(12);
+    // `messages` lets a caller answer something other than the running audio
+    // conversation (the screenshot OCR path passes the extracted screen text).
+    // Without it the answer silently ignores whatever the caller asked about.
+    const messages = overrideMessages && overrideMessages.length ? overrideMessages : recentHistoryAsAnthropicMessages(12);
     if (!messages.length) return null;
 
     try {

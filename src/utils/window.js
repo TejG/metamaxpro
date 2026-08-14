@@ -44,6 +44,11 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         hasShadow: false,
         alwaysOnTop: true,
         resizable: true,
+        // macOS swallows the first mouse-down on an inactive window (it only
+        // activates it). This overlay is almost never the focused window when
+        // the user reaches for it, so without this the first click on the drag
+        // bar was consumed by activation and dragging needed a second click.
+        acceptFirstMouse: true,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false, // TODO: change to true
@@ -568,6 +573,10 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
             resizable: false,
             hasShadow: false,
             skipTaskbar: true,
+            // Same as the main window: the mascot is dragged by a renderer-side
+            // mousedown, which macOS won't deliver on an inactive window unless
+            // the first mouse is accepted.
+            acceptFirstMouse: true,
             opacity: fromBounds ? (fromBounds.opacity ?? 0) : 0,
             webPreferences: {
                 nodeIntegration: true,

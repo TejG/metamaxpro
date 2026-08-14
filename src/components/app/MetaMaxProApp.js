@@ -135,39 +135,6 @@ export class MetaMaxProApp extends LitElement {
             -webkit-app-region: no-drag;
         }
 
-        .nav-item {
-            display: flex;
-            align-items: center;
-            gap: var(--space-sm);
-            padding: var(--space-sm) var(--space-md);
-            border-radius: var(--radius-md);
-            color: var(--text-secondary);
-            font-size: var(--font-size-sm);
-            font-weight: var(--font-weight-medium);
-            cursor: pointer;
-            transition: color var(--transition), background var(--transition);
-            border: none;
-            background: none;
-            width: 100%;
-            text-align: left;
-        }
-
-        .nav-item:hover {
-            color: var(--text-primary);
-            background: var(--bg-hover);
-        }
-
-        .nav-item.active {
-            color: var(--text-primary);
-            background: var(--bg-elevated);
-        }
-
-        .nav-item svg {
-            width: 20px;
-            height: 20px;
-            flex-shrink: 0;
-        }
-
         .sidebar-footer {
             padding: var(--space-sm);
             margin-top: var(--space-sm);
@@ -249,7 +216,13 @@ export class MetaMaxProApp extends LitElement {
             gap: 10px;
             flex: 1;
             min-width: 0; /* let the status pill ellipsize instead of overlapping */
-            -webkit-app-region: no-drag;
+            /* MUST stay draggable: flex:1 makes this group absorb all the bar's
+               slack width, so marking it no-drag left the window with almost no
+               grabbable surface (only the bar's 16px padding) and dragging took
+               several attempts to land. Nothing in here is interactive — brand,
+               mode label and status pill are plain spans. Any clickable element
+               added here needs its OWN no-drag. */
+            -webkit-app-region: drag;
             z-index: 1;
         }
 
@@ -340,6 +313,12 @@ export class MetaMaxProApp extends LitElement {
             flex-shrink: 0;
             -webkit-app-region: no-drag;
             z-index: 1;
+        }
+
+        /* The timer is a plain span inside the (no-drag) button cluster —
+           reclaim it as drag surface so there's a handle on the right too. */
+        .live-bar-text.timer {
+            -webkit-app-region: drag;
         }
 
         .live-bar-text {
@@ -480,52 +459,6 @@ export class MetaMaxProApp extends LitElement {
 
         ::-webkit-scrollbar-thumb:hover {
             background: #444444;
-        }
-
-        /* Bottom navigation (replaces left sidebar) */
-        .bottom-nav {
-            position: fixed;
-            left: 0;
-            right: 0;
-            bottom: 14px;
-            display: flex;
-            justify-content: center;
-            pointer-events: auto;
-            z-index: 9998;
-        }
-
-        .bottom-nav.hidden {
-            display: none;
-        }
-
-        .bottom-nav-inner {
-            display: flex;
-            gap: var(--space-lg);
-            padding: 10px 16px;
-            border-radius: 12px;
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.35);
-            align-items: center;
-        }
-
-        .bottom-nav .nav-item {
-            display: inline-flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: var(--text-secondary);
-            background: transparent;
-        }
-
-        .bottom-nav .nav-item svg { width: 18px; height: 18px; }
-
-        /* Give non-live content room at the bottom so the fixed bottom nav
-           never covers the last row of a settings page. */
-        .content-inner:not(.live) {
-            padding-bottom: 84px;
         }
 
         /* ── Settings shell: top tab bar + scrollable body ── */
@@ -1282,108 +1215,11 @@ export class MetaMaxProApp extends LitElement {
         `;
     }
 
-    renderSidebar() {
-        const items = [
-            {
-                id: 'main',
-                label: 'Home',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path
-                            d="m19 8.71l-5.333-4.148a2.666 2.666 0 0 0-3.274 0L5.059 8.71a2.67 2.67 0 0 0-1.029 2.105v7.2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.2c0-.823-.38-1.6-1.03-2.105"
-                        />
-                        <path d="M16 15c-2.21 1.333-5.792 1.333-8 0" />
-                    </g>
-                </svg>`,
-            },
-            {
-                id: 'ai-customize',
-                label: 'AI Customization',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <path
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M13 3v7h6l-8 11v-7H5z"
-                    />
-                </svg>`,
-            },
-            {
-                id: 'history',
-                label: 'History',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path
-                            d="M10 20.777a9 9 0 0 1-2.48-.969M14 3.223a9.003 9.003 0 0 1 0 17.554m-9.421-3.684a9 9 0 0 1-1.227-2.592M3.124 10.5c.16-.95.468-1.85.9-2.675l.169-.305m2.714-2.941A9 9 0 0 1 10 3.223"
-                        />
-                        <path d="M12 8v4l3 3" />
-                    </g>
-                </svg>`,
-            },
-            {
-                id: 'customize',
-                label: 'Settings',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path
-                            d="M19.875 6.27A2.23 2.23 0 0 1 21 8.218v7.284c0 .809-.443 1.555-1.158 1.948l-6.75 4.27a2.27 2.27 0 0 1-2.184 0l-6.75-4.27A2.23 2.23 0 0 1 3 15.502V8.217c0-.809.443-1.554 1.158-1.947l6.75-3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98z"
-                        />
-                        <path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0" />
-                    </g>
-                </svg>`,
-            },
-            {
-                id: 'feedback',
-                label: 'Feedback',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 9h.01m4.99 0h.01" />
-                        <path d="M9.5 13a3.5 3.5 0 0 0 5 0" />
-                    </g>
-                </svg>`,
-            },
-            {
-                id: 'help',
-                label: 'Help',
-                icon: html`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
-                        <path d="M12 3c7.2 0 9 1.8 9 9s-1.8 9-9 9s-9-1.8-9-9s1.8-9 9-9m0 13v.01" />
-                        <path d="M12 13a2 2 0 0 0 .914-3.782a1.98 1.98 0 0 0-2.414.483" />
-                    </g>
-                </svg>`,
-            },
-        ];
-
-        // When on the main view, MainView renders its own nav and controls.
-        // Avoid duplicating the navigation here.
-        if (this.currentView === 'main') return '';
-
-        return html`
-            <div class="bottom-nav ${this._isLiveMode() ? 'hidden' : ''}">
-                <div class="bottom-nav-inner">
-                    ${items.map(
-                        item => html`
-                            <button
-                                class="nav-item ${this._navItemActive(item.id) ? 'active' : ''}"
-                                @click=${() => this._navItemClick(item.id)}
-                                title=${item.label}
-                            >
-                                ${item.icon}
-                                <div style="font-size:12px;">${item.label}</div>
-                            </button>
-                        `
-                    )}
-                </div>
-            </div>
-        `;
-    }
-
-    // Bottom-nav items map onto either a top-level view ('main') or a settings
-    // tab. The settings view is the only place these sections actually render,
-    // so route non-main items through openSettings instead of navigate() —
-    // otherwise the app would show a blank "Unknown view" screen.
+    // MainView's nav items map onto either a top-level view ('main') or a
+    // settings tab. The settings view is the only place these sections actually
+    // render, so route non-main items through openSettings instead of
+    // navigate() — otherwise the app would show a blank "Unknown view" screen.
+    // Once inside Settings, the settings tab bar takes over navigation.
     _navItemClick(id) {
         const tabMap = {
             'ai-customize': 'profile',
@@ -1398,19 +1234,6 @@ export class MetaMaxProApp extends LitElement {
         } else {
             this.navigate(id);
         }
-    }
-
-    _navItemActive(id) {
-        if (id === 'main') return this.currentView === 'main';
-        if (this.currentView !== 'settings') return false;
-        const tabMap = {
-            'ai-customize': 'profile',
-            history: 'history',
-            customize: 'preferences',
-            feedback: 'help',
-            help: 'help',
-        };
-        return this.settingsTab === tabMap[id];
     }
 
     renderLiveBar() {
@@ -1517,7 +1340,6 @@ export class MetaMaxProApp extends LitElement {
                     ${isLive ? this.renderLiveBar() : ''}
                     <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
-                ${this.renderSidebar()}
             </div>
         `;
     }
