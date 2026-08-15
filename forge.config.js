@@ -4,7 +4,7 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
     packagerConfig: {
         asar: {
-            unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
+            unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img,tesseract.js-core,tesseract.js}/**',
         },
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'MetaQuest',
@@ -31,10 +31,11 @@ module.exports = {
                 /\.(bak|tmp|log)$/i,
                 /^\/node_modules\/onnxruntime-web($|\/)/,
                 ...otherPlatforms.map(p => new RegExp(`^/node_modules/onnxruntime-node/bin/napi-v3/${p}($|/)`)),
-                // Drop tesseract core variants the node worker never loads
-                // (keeps tesseract-core-simd-lstm* and tesseract-core-relaxedsimd-lstm*).
-                /^\/node_modules\/tesseract\.js-core\/tesseract-core(-simd|-relaxedsimd)?\.wasm(\.js)?$/,
-                /^\/node_modules\/tesseract\.js-core\/tesseract-core-lstm\.wasm(\.js)?$/,
+                // Drop only the plain (non-simd, non-lstm) tesseract-core build, which is
+                // never loaded on any platform we target. All SIMD/relaxedSIMD/LSTM
+                // variants are kept so the runtime can pick the right one per CPU/OS
+                // (Windows in particular falls back through these variants).
+                /^\/node_modules\/tesseract\.js-core\/tesseract-core\.wasm(\.js)?$/,
             ];
         })(),
     icon: 'src/assets/logo',

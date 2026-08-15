@@ -558,6 +558,10 @@ export class MetaMaxProApp extends LitElement {
         this._timerInterval = null;
         this._updateAvailable = false;
         this._whisperDownloading = false;
+        // Fix 3: latest rolling-window partial transcript from whisper VAD.
+        // Rendered as an italic/dim placeholder until the final transcript
+        // arrives and the question bubble becomes permanent.
+        this._interimText = '';
         this._localVersion = '';
         this._lastChatError = null;
 
@@ -640,6 +644,10 @@ export class MetaMaxProApp extends LitElement {
             ipcRenderer.on('whisper-downloading', (_, downloading) => {
                 this._whisperDownloading = downloading;
             });
+            // Fix 3: rolling-window STT partials. Update the local state and
+            // re-render so the question bubble shows dim/italic text in
+            // near-real-time.
+            ipcRenderer.on('interim-transcript', (_, text) => this.setInterimTranscript(text));
         }
 
         // If a required permission gets revoked while running, catch it when the
@@ -660,10 +668,17 @@ export class MetaMaxProApp extends LitElement {
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
+            ipcRenderer.removeAllListeners('interim-transcript');
         }
     }
 
     // ── Timer ──
+
+    // Fix 3: clear the dim/italic placeholder at the end of a session so
+    // the next session starts from a clean slate.
+    _clearInterim() {
+        this._interimText = '';
+    }
 
     _startTimer() {
         this._stopTimer();
@@ -708,6 +723,17 @@ export class MetaMaxProApp extends LitElement {
         }
     }
 
+    // Fix 3: rolling-window partial transcript from whisper VAD. Stored on
+    // the component (not appended to this.responses) so we can update it
+    // in place without polluting the chat history; the AssistantView
+    // reads it and renders a dim/italic placeholder at the end.
+    setInterimTranscript(text) {
+        const trimmed = String(text || '').trim();
+        if (trimmed === this._interimText) return;
+        this._interimText = trimmed;
+        this.requestUpdate();
+    }
+
     _isErrorStatus(text) {
         if (!text) return false;
         return /^⚠️|\berror\b|\bfailed\b|\bunavailable\b/i.test(text);
@@ -730,6 +756,9 @@ export class MetaMaxProApp extends LitElement {
         if (!text || !String(text).trim()) return;
         this.responses = [...this.responses, { role: 'question', text: String(text).trim() }];
         this.currentResponseIndex = this.responses.length - 1;
+        // Fix 3: clear the dim/italic placeholder once the real question is
+        // committed, so we don't show the same words twice.
+        this._interimText = '';
         this.requestUpdate();
     }
 
@@ -1121,6 +1150,7 @@ export class MetaMaxProApp extends LitElement {
                     <assistant-view
                         .responses=${this.responses}
                         .currentResponseIndex=${this.currentResponseIndex}
+                        .interimText=${this._interimText}
                         .selectedProfile=${this.selectedProfile}
                         .sessionActive=${this.sessionActive}
                         .onSendText=${msg => this.handleSendText(msg)}

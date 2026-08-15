@@ -370,7 +370,14 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             routeAnswer(transcript);
         }
 
-        startWhisperVAD(onWhisperTranscription);
+        startWhisperVAD({
+            onFinal: onWhisperTranscription,
+            // Fix 3: forward rolling-window partial transcripts to the renderer so the
+            // question bubble can update in dim/italic text before the final arrives.
+            onInterim: text => {
+                try { sendToRenderer('interim-transcript', text); } catch (_) { /* renderer may be detached */ }
+            },
+        });
         sendToRenderer('update-status', 'Live');
         console.log('[Whisper] Mode initialized — profile:', profile);
         return true;
@@ -388,7 +395,14 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             queueForAnthropic(transcript);
         }
 
-        startWhisperVAD(onWhisperTranscription);
+        startWhisperVAD({
+            onFinal: onWhisperTranscription,
+            // Fix 3: forward rolling-window partial transcripts to the renderer so the
+            // question bubble can update in dim/italic text before the final arrives.
+            onInterim: text => {
+                try { sendToRenderer('interim-transcript', text); } catch (_) { /* renderer may be detached */ }
+            },
+        });
         sendToRenderer('update-status', 'Claude Live');
         console.log('[Anthropic] Mode initialized — profile:', profile);
         return true;
