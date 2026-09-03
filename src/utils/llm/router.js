@@ -20,9 +20,7 @@ const anthropicAdapter = require('./providers/anthropic');
 const geminiAdapter = require('./providers/gemini');
 const health = require('./providers/health');
 
-// Warm up the Groq model cache once at startup so the first answer doesn't pay
-// the discovery latency. Fire-and-forget — errors are handled inside listModels.
-groqAdapter.listModels().catch(() => {});
+// Groq model cache is loaded lazily on first answer or session start
 
 // kept for external call-sites that check key presence independently
 function hasGroqKey() {

@@ -1578,13 +1578,26 @@ export class AssistantView extends LitElement {
                             .replace(/```\s*"?\s*$/, '')
                             .trim()
                             .split('\n')
-                            .map(line =>
-                                line
-                                    .replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`)
-                                    .replace(/\("(.+)"\)/g, (_, l) => `("${l.replace(/"/g, '')}")`)
-                                    .replace(/\[([^\]"]*[\/\(\)][^\]"]*)\]/g, (_, l) => `["${l}"]`)
-                                    .replace(/^(\s*participant\s+)([^"\n]*[\/\(\)\.][^"\n]*)$/g, (_, p, name) => `${p}"${name.trim()}"`)
-                            )
+                            .map(line => {
+                                // Strip &amp; artifacts from subgraph names (subgraph Data & Async → subgraph Data and Async)
+                                line = line.replace(/^(\s*subgraph\s+)(.*)$/g, (_, prefix, name) => {
+                                    const clean = name.replace(/&/g, 'and').replace(/[^a-zA-Z0-9 _-]/g, '');
+                                    return prefix + clean.trim();
+                                });
+                                // Convert dotted arrows -.-> or -. text .-> to solid arrows -->
+                                line = line.replace(/\s*-\..*?\.?->\s*/g, ' --> ');
+                                // Convert thick arrows ==> to solid arrows -->
+                                line = line.replace(/\s*==+>\s*/g, ' --> ');
+                                // Quote unquoted bracket labels containing special chars: / ( ) : & ;
+                                line = line.replace(/\[([^\]"]*[\/\(\):&;][^\]"]*)\]/g, (_, l) => `["${l}"]`);
+                                // Fix already-quoted labels with nested quotes
+                                line = line.replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`);
+                                // Fix parenthesized labels (round shapes)
+                                line = line.replace(/\("(.+)"\)/g, (_, l) => `("${l.replace(/"/g, '')}")`);
+                                // Quote participant lines with special chars
+                                line = line.replace(/^(\s*participant\s+)([^"\n]*[\/\(\)\.][^"\n]*)$/g, (_, p, name) => `${p}"${name.trim()}"`);
+                                return line;
+                            })
                             .join('\n');
                         try {
                             const id = 'mermaid-svg-' + i + '-' + Date.now();

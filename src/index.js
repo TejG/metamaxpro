@@ -332,7 +332,7 @@ function setupGeneralIpcHandlers() {
             const { desktopCapturer, screen } = require('electron');
             const primary = screen.getPrimaryDisplay();
             const { width, height } = primary.size;
-            const scale = width > 1600 ? 1600 / width : 1;
+            const scale = width > 1200 ? 1200 / width : 1;
             const sources = await desktopCapturer.getSources({
                 types: ['screen'],
                 thumbnailSize: { width: Math.round(width * scale), height: Math.round(height * scale) },
@@ -340,7 +340,7 @@ function setupGeneralIpcHandlers() {
             if (!sources.length) return { success: false, error: 'No screen sources available' };
             // Prefer the primary display's source when identifiable.
             const source = sources.find(s => s.display_id === String(primary.id)) || sources[0];
-            const jpegQuality = quality === 'high' ? 90 : quality === 'low' ? 50 : 75;
+            const jpegQuality = quality === 'high' ? 75 : quality === 'low' ? 45 : 60;
             const buf = source.thumbnail.toJPEG(jpegQuality);
             if (!buf || buf.length < 1000) return { success: false, error: 'Captured frame was empty' };
             return { success: true, data: buf.toString('base64') };

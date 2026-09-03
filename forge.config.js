@@ -4,7 +4,7 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
     packagerConfig: {
         asar: {
-            unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img,tesseract.js-core,tesseract.js}/**',
+            unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img}/**',
         },
         extraResource: ['./src/assets/SystemAudioDump'],
         name: 'MetaQuest',
@@ -15,8 +15,6 @@ module.exports = {
         //   main always uses the onnxruntime-node backend.
         // - onnxruntime-node binaries for OTHER platforms (~140MB): each
         //   platform build only needs its own napi binary.
-        // - tesseract.js-core non-LSTM wasm variants (~20MB): node worker
-        //   only ever loads the (relaxed)simd-lstm builds.
         ignore: (() => {
             const platform = process.platform; // darwin | win32 | linux
             const otherPlatforms = ['darwin', 'win32', 'linux'].filter(p => p !== platform);
@@ -26,16 +24,10 @@ module.exports = {
                 /^\/\.git($|\/)/,
                 /^\/\.vscode($|\/)/,
                 /\.md$/i,
-                /^\/eng\.traineddata$/, // tesseract downloads its own language data at runtime
                 /^\/entitlements\.plist$/,
                 /\.(bak|tmp|log)$/i,
                 /^\/node_modules\/onnxruntime-web($|\/)/,
                 ...otherPlatforms.map(p => new RegExp(`^/node_modules/onnxruntime-node/bin/napi-v3/${p}($|/)`)),
-                // Drop only the plain (non-simd, non-lstm) tesseract-core build, which is
-                // never loaded on any platform we target. All SIMD/relaxedSIMD/LSTM
-                // variants are kept so the runtime can pick the right one per CPU/OS
-                // (Windows in particular falls back through these variants).
-                /^\/node_modules\/tesseract\.js-core\/tesseract-core\.wasm(\.js)?$/,
             ];
         })(),
     icon: 'src/assets/logo',

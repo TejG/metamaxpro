@@ -771,10 +771,9 @@ async function _captureFrameAsBase64(quality = 'medium') {
         return null;
     }
 
-    // Keep enough resolution that dense code/text in a long question stays
-    // legible to the model. Solve accuracy on multi-screen questions is far
-    // more sensitive to legibility than to payload size.
-    const MAX_WIDTH = 1600;
+    // Keep resolution balanced so code/text stays sharp while keeping
+    // JPEG payload small (~100-150KB) for sub-second upload.
+    const MAX_WIDTH = 1200;
     const srcW = hiddenVideo.videoWidth;
     const srcH = hiddenVideo.videoHeight;
     const destW = srcW > MAX_WIDTH ? MAX_WIDTH : srcW;
@@ -783,7 +782,7 @@ async function _captureFrameAsBase64(quality = 'medium') {
     offscreenCanvas.height = destH;
     offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
 
-    const qualityValue = quality === 'high' ? 0.9 : quality === 'low' ? 0.5 : 0.75;
+    const qualityValue = 0.6;
 
     return new Promise(resolve => {
         offscreenCanvas.toBlob(

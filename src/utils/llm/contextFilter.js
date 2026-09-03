@@ -17,7 +17,7 @@ function getRelevantResumeSections(question, resumeText) {
     if (!question || !question.trim()) {
         // No question context → send experience + skills (safe default)
         const sections = parseResumeSections(resumeText);
-        return combineSection(sections, ['experience', 'skills']);
+        return combineSections(sections, ['experience', 'skills']);
     }
 
     const sections = parseResumeSections(resumeText);

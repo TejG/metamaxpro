@@ -1,13 +1,14 @@
-// Screenshot solving: vision requests to Anthropic (Claude), Groq (llama-4
-// vision), and Gemini (HTTP), plus OCR-first flow for cost optimization,
-// plus the provider-routing logic that picks the strongest available reasoner first.
+// Screenshot solving: vision requests to Gemini (HTTP), Anthropic (Claude), and Groq (vision),
+// with provider-routing that picks the fastest available reasoner first.
 const { GoogleGenAI } = require('@google/genai');
-const { S, sendToRenderer, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate } = require('./state');
-const { GROQ_VISION_MODELS, buildImageModelFallbacks, GEMINI_THINKING, isRateLimitError, getRetryDelaySeconds } = require('./config');
+const { S, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate } = require('./state');
+const { GROQ_VISION_MODELS, buildImageModelFallbacks, isRateLimitError, getRetryDelaySeconds } = require('./config');
 const { saveScreenAnalysis, recordScreenTurnInHistory, recentHistoryAsAnthropicMessages, recentHistoryAsGeminiContents } = require('./persistence');
 const { fetchWithAnthropicRetry } = require('./router');
+const health = require('./providers/health');
 const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, getAnthropicApiKey } = require('../../storage');
-const { extractTextFromImages, isOcrSufficient } = require('./ocr');
+
+const ANTHROPIC_VISION_MODEL = 'claude-sonnet-4-6';
 
 // Solve screenshots with Claude vision (Anthropic provider mode). Context-aware:
 // persona (resume + JD + human-tone rules) as system, prior conversation as
@@ -37,7 +38,7 @@ async function sendImagesToAnthropic(images, prompt) {
                 },
                 signal: S.currentGroqAbortController.signal,
                 body: JSON.stringify({
-                    model: 'claude-sonnet-4-6',
+                    model: ANTHROPIC_VISION_MODEL,
                     max_tokens: 4096,
                     system: S.currentSystemPrompt ? [{ type: 'text', text: S.currentSystemPrompt, cache_control: { type: 'ephemeral' } }] : undefined,
                     messages,
@@ -47,10 +48,19 @@ async function sendImagesToAnthropic(images, prompt) {
             'Sonnet-Vision'
         );
 
-        if (!response) return { success: false, error: 'Request aborted' };
+        if (!response) {
+            discardStreamUpdate();
+            return { success: false, error: 'Request aborted' };
+        }
         if (!response.ok) {
             const errText = await response.text();
             console.error('[Anthropic] Vision API error:', response.status, errText);
+            // Account-level failure (billing / daily quota): trip the circuit
+            // breaker so the next solve skips Anthropic outright instead of
+            // paying this failed round-trip before falling back.
+            const kind = health.classifyFailure(response.status, errText);
+            if (kind) health.markDown('anthropic', kind);
+            discardStreamUpdate();
             return { success: false, error: `Claude error ${response.status}` };
         }
 
@@ -81,11 +91,21 @@ async function sendImagesToAnthropic(images, prompt) {
             }
         }
 
+        // An empty stream is a failure, not a success: reporting success would
+        // leave the renderer's "..." placeholder unresolved and stop the router
+        // from trying the next provider.
+        if (!fullText.trim()) {
+            discardStreamUpdate();
+            return { success: false, error: 'Claude returned an empty response' };
+        }
+
         flushStreamUpdate();
-        saveScreenAnalysis(prompt, fullText, 'claude-sonnet-4-6');
+        health.markUp('anthropic');
+        saveScreenAnalysis(prompt, fullText, ANTHROPIC_VISION_MODEL);
         recordScreenTurnInHistory(fullText);
-        return { success: true, text: fullText, model: 'claude-sonnet-4-6' };
+        return { success: true, text: fullText, model: ANTHROPIC_VISION_MODEL };
     } catch (error) {
+        discardStreamUpdate();
         if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
         console.error('[Anthropic] Vision error:', error);
         return { success: false, error: error.message };
@@ -140,6 +160,7 @@ async function sendImagesToGroqVision(images, prompt) {
                 const errText = await response.text();
                 console.error(`[Groq] Vision API error (${model}):`, response.status, errText);
                 lastError = `Groq vision error ${response.status}`;
+                discardStreamUpdate();
                 // A decommissioned/inaccessible model (404) is a config issue that
                 // will fail for every request — try the next candidate immediately
                 // rather than giving up. Other errors (4xx auth/429/5xx) aren't
@@ -174,11 +195,18 @@ async function sendImagesToGroqVision(images, prompt) {
                     }
                 }
             }
+            // Empty stream — drop the partial and let the next model/provider try.
+            if (!fullText.trim()) {
+                discardStreamUpdate();
+                lastError = 'Groq vision returned an empty response';
+                continue;
+            }
             flushStreamUpdate();
             saveScreenAnalysis(prompt, fullText, 'groq-vision');
             recordScreenTurnInHistory(fullText);
             return { success: true, text: fullText, model: 'groq-vision' };
         } catch (error) {
+            discardStreamUpdate();
             if (error.name === 'AbortError') return { success: false, error: 'Request cancelled' };
             console.error(`[Groq] Vision error (${model}):`, error);
             lastError = error.message;
@@ -195,11 +223,14 @@ async function sendImagesToGroqVision(images, prompt) {
 function buildImageRequest(imageParts, taskPrompt) {
     const contents = [...recentHistoryAsGeminiContents(), { role: 'user', parts: [...imageParts, { text: taskPrompt }] }];
     // A screenshot is almost always a PROBLEM to solve (a coding task, an
-    // aptitude/MCQ question, a diagram) rather than small talk, so enable
-    // reasoning here by default and keep temperature low for deterministic
-    // arithmetic/logic. This is what makes on-screen aptitude questions correct
-    // instead of a fast wrong guess.
-    const config = { ...GEMINI_THINKING, temperature: 0.1 };
+    // aptitude/MCQ question, a diagram) rather than small talk. Thinking is off
+    // so the answer starts streaming in ~1.5s — on-screen questions are read
+    // live, and a slow-but-considered answer is worse than a fast one — while
+    // the low temperature keeps the arithmetic/logic deterministic.
+    const config = {
+        thinkingConfig: { thinkingBudget: 0 },
+        temperature: 0.1,
+    };
     if (S.currentSystemPrompt && S.currentSystemPrompt.trim()) {
         config.systemInstruction = S.currentSystemPrompt;
     }
@@ -225,68 +256,40 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
         console.log(`[Gemini] Sending single image to ${model} (streaming, context-aware=${!!config.systemInstruction})...`);
 
-        // Iterate through MODEL_FALLBACKS (capped to 2) and allow only 1 attempt
-        // per model — a second attempt after a fixed backoff rarely helps and was
-        // doubling the worst-case wait when a model was unavailable/rate-limited.
-        const MAX_ATTEMPTS_PER_MODEL = 1;
+        // One attempt per candidate model: retrying the SAME model after a fixed
+        // backoff rarely helps (404s are permanent, 429s outlive the backoff) and
+        // it doubled the worst-case wait before the next fallback was tried.
         let response = null;
         let lastErr = null;
         for (const candidateModel of MODEL_FALLBACKS) {
-            let attempt = 0;
             model = candidateModel;
-            while (attempt < MAX_ATTEMPTS_PER_MODEL) {
-                try {
-                    console.log(`[Gemini] trying model ${model} (attempt ${attempt + 1}/${MAX_ATTEMPTS_PER_MODEL})`);
-                    response = await ai.models.generateContentStream({ model: model, contents: contents, config });
-                    lastErr = null;
-                    break; // got a response for this model
-                } catch (err) {
-                    lastErr = err;
-                    const msg = err && (err.message || err.toString());
-                    console.error(
-                        `[Gemini] generateContentStream failed for model ${model} attempt ${attempt + 1}:`,
-                        msg,
-                        err && err.stack ? err.stack : err
-                    );
+            try {
+                console.log(`[Gemini] trying model ${model}`);
+                response = await ai.models.generateContentStream({ model: model, contents: contents, config });
+                lastErr = null;
+                break; // got a response for this model
+            } catch (err) {
+                lastErr = err;
+                const msg = err && (err.message || err.toString());
+                console.error(`[Gemini] generateContentStream failed for model ${model}:`, msg, err && err.stack ? err.stack : err);
 
-                    // If it's a 404 / model-not-found error, break out to try the next model
-                    const isNotFound = msg && msg.toLowerCase().includes('not found') && msg.toLowerCase().includes('model');
-                    attempt++;
-                    if (isNotFound) {
-                        console.log(`[Gemini] model ${model} not available for this API version, trying next fallback`);
-                        break; // try next candidateModel
-                    }
-
-                    // Rate-limited (429): retrying the SAME model won't help within
-                    // the per-minute window, so skip straight to the next fallback.
-                    if (isRateLimitError(err)) {
-                        console.log(`[Gemini] model ${model} rate-limited (429), trying next fallback`);
-                        break; // try next candidateModel
-                    }
-
-                    if (attempt < MAX_ATTEMPTS_PER_MODEL) {
-                        const waitMs = 500 * attempt;
-                        console.log(`[Gemini] retrying in ${waitMs}ms...`);
-                        await new Promise(r => setTimeout(r, waitMs));
-                        continue;
-                    }
+                const isNotFound = msg && msg.toLowerCase().includes('not found') && msg.toLowerCase().includes('model');
+                if (isNotFound) {
+                    console.log(`[Gemini] model ${model} not available for this API version, trying next fallback`);
+                } else if (isRateLimitError(err)) {
+                    console.log(`[Gemini] model ${model} rate-limited (429), trying next fallback`);
                 }
             }
-
-            if (response) break; // success, stop trying other models
         }
 
-        if (lastErr && !response) {
-            // All candidate models/attempts failed — log which models were attempted
+        if (!response) {
+            // All candidate models failed — surface the underlying cause so the
+            // catch below can produce a friendly rate-limit message.
             console.error(
                 '[Gemini] All candidate models failed for image generation. Last error:',
                 lastErr && (lastErr.message || lastErr.toString())
             );
-            throw lastErr;
-        }
-
-        if (!response) {
-            throw new Error('No response from Gemini generateContentStream');
+            throw lastErr || new Error('No response from Gemini generateContentStream');
         }
 
         // Increment count after successful call
@@ -303,6 +306,11 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             }
         }
 
+        if (!fullText.trim()) {
+            discardStreamUpdate();
+            return { success: false, error: 'Gemini returned an empty response' };
+        }
+
         flushStreamUpdate();
         console.log(`[Gemini] Image response completed from ${model}`);
 
@@ -313,6 +321,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
+        discardStreamUpdate();
         console.error('[Gemini] Error sending image to Gemini HTTP:', error && error.stack ? error.stack : error);
         if (isRateLimitError(error)) {
             const secs = getRetryDelaySeconds(error);
@@ -406,13 +415,19 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
             }
         }
 
+        if (!fullText.trim()) {
+            discardStreamUpdate();
+            return { success: false, error: 'Gemini returned an empty response' };
+        }
+
         flushStreamUpdate();
-        console.log(`Multi-image response completed from ${model}`);
-        saveScreenAnalysis(prompt, fullText, model);
+        console.log(`Multi-image response completed from ${usedModel}`);
+        saveScreenAnalysis(prompt, fullText, usedModel);
         recordScreenTurnInHistory(fullText);
 
-        return { success: true, text: fullText, model: model };
+        return { success: true, text: fullText, model: usedModel };
     } catch (error) {
+        discardStreamUpdate();
         console.error('Error sending images to Gemini HTTP:', error && error.stack ? error.stack : error);
         if (isRateLimitError(error)) {
             const secs = getRetryDelaySeconds(error);
@@ -428,149 +443,54 @@ async function sendMultipleImagesToGeminiHttp(images, prompt) {
     }
 }
 
-// Route screenshot solving to a vision-capable provider based on the active
-// mode, with fallbacks so a solve works whenever ANY vision key is configured.
-// (cloud/local are handled by the IPC callers before this is reached.)
+// Route screenshot solving directly to a vision-capable provider based on available keys.
+// Gemini Flash Vision (fastest & native multimodal) -> Anthropic -> Groq Vision.
 async function routeImagesToProvider(images, prompt) {
-    // Task 5: OCR-first flow — try extracting text before using vision API
-    // to reduce costs for text-heavy screenshots (code, documents, etc.)
-    console.log('[Vision] Starting OCR-first flow...');
-    const ocrStartTime = Date.now();
-    const ocrResult = await extractTextFromImages(images);
-    const ocrDuration = Date.now() - ocrStartTime;
-
-    console.log(`[Vision] OCR completed in ${ocrDuration}ms:`, {
-        success: ocrResult.success,
-        allSufficient: ocrResult.allSufficient,
-        results: ocrResult.results?.map(r => ({
-            textLength: r.text?.length || 0,
-            confidence: Math.round(r.confidence || 0),
-            cached: r.cached,
-        })),
-    });
-
-    // Stash a short OCR excerpt so recordScreenTurnInHistory can label this
-    // screen exchange with its actual content — this is what lets a later
-    // screenshot (e.g. a failed test run) be recognized as a follow-up.
-    if (ocrResult.success && ocrResult.results?.length) {
-        S.lastScreenOcrExcerpt = ocrResult.results
-            .map(r => r.text || '')
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .slice(0, 400);
+    if (!images || images.length === 0) {
+        return { success: false, error: 'No images provided for analysis' };
     }
 
-    // If OCR extracted sufficient text from all images, prepend OCR text to prompt
-    // and route to text LLM instead of vision API (massive cost savings)
-    if (ocrResult.success && ocrResult.allSufficient) {
-        const extractedTexts = ocrResult.results.map((r, idx) => `[Screenshot ${idx + 1} - OCR Text]:\n${r.text}`).join('\n\n');
-        const enhancedPrompt = `${extractedTexts}\n\n[User's Question]:\n${prompt}`;
+    console.log(`[Vision] Direct Vision routing for ${images.length} image(s)...`);
 
-        console.log('[Vision] OCR sufficient — routing to text LLM (vision API avoided, ~60% cost savings)');
-
-        // Route to text LLM using the existing router
-        // Import router's routeAnswer at the top would create circular dependency,
-        // so we'll use the provider adapters directly here
-        const groqAdapter = require('./providers/groq');
-        const anthropicAdapter = require('./providers/anthropic');
-        const geminiAdapter = require('./providers/gemini');
-
-        // Try text providers in order: Groq (free/fast) → Anthropic → Gemini
-        const textAttempts = [];
-        if (await groqAdapter.isAvailable()) textAttempts.push({ adapter: groqAdapter, name: 'Groq' });
-        if (await anthropicAdapter.isAvailable()) textAttempts.push({ adapter: anthropicAdapter, name: 'Anthropic' });
-        if (await geminiAdapter.isAvailable()) textAttempts.push({ adapter: geminiAdapter, name: 'Gemini' });
-
-        for (const { adapter, name } of textAttempts) {
-            try {
-                console.log(`[Vision/OCR] Trying text LLM: ${name}`);
-                
-                // Build conversation history properly:
-                // 1. Take recent history (up to 8 messages)
-                // 2. Ensure it ends with a user message (required by Gemini and others)
-                // 3. Append the OCR-enhanced prompt as the final user message
-                let recentHistory = S.groqConversationHistory.slice(-8);
-                
-                // If history ends with assistant message, trim it off to ensure user message is last
-                if (recentHistory.length > 0 && recentHistory[recentHistory.length - 1].role === 'assistant') {
-                    recentHistory = recentHistory.slice(0, -1);
-                }
-                
-                // Build the final message sequence. Each adapter supplies its own
-                // system prompt, so pass conversation turns only.
-                const messages = [...recentHistory, { role: 'user', content: enhancedPrompt }];
-
-                const looksLikeCode = require('./config').looksLikeCodingExercise(extractedTexts);
-                // streamAnswer pushes tokens to the renderer itself and resolves
-                // to the COMPLETE answer text — it is not an async iterable.
-                const fullText = await adapter.streamAnswer({
-                    messages,
-                    // Coding exercises need reasoning to produce code that actually
-                    // passes the judge; conversational screens stay fast.
-                    reasoning: looksLikeCode,
-                    temperature: 0.2,
-                });
-
-                if (fullText) {
-                    flushStreamUpdate();
-                    saveScreenAnalysis(prompt, fullText, `ocr+${name.toLowerCase()}`);
-                    recordScreenTurnInHistory(fullText);
-
-                    return {
-                        success: true,
-                        text: fullText,
-                        model: `ocr+${name.toLowerCase()}`,
-                        ocrUsed: true,
-                        ocrDuration,
-                        costSavings: '~60% (vision → text LLM)',
-                    };
-                }
-                // Drop any partial this provider streamed so it can't bleed into
-                // the next provider's answer.
-                discardStreamUpdate();
-            } catch (error) {
-                discardStreamUpdate();
-                console.log(`[Vision/OCR] ${name} text LLM failed:`, error.message);
-            }
-        }
-
-        // If all text LLMs failed, fall back to vision API
-        console.log('[Vision] OCR text routing failed — falling back to vision API');
-    } else {
-        console.log('[Vision] OCR insufficient — falling back to vision API');
-    }
-
-    // Vision API fallback (original flow)
     const attempts = [];
-    if (getAnthropicApiKey()) attempts.push(() => sendImagesToAnthropic(images, prompt));
-    if (getApiKey()) attempts.push(() => sendMultipleImagesToGeminiHttp(images, prompt));
-    if (getGroqApiKey()) attempts.push(() => sendImagesToGroqVision(images, prompt));
+    // Skip Anthropic entirely while the circuit breaker is open (billing/quota
+    // failure seen recently) — a solve is latency-critical and that round-trip
+    // is a guaranteed loss.
+    const anthropicUsable = getAnthropicApiKey() && !health.isDown('anthropic');
 
-    // In explicit Anthropic mode, Claude leads; otherwise Gemini-with-thinking
-    // leads (byok's default key). Anthropic already sits first above, so only
-    // reorder to put Gemini first when NOT in Anthropic mode.
-    if (S.currentProviderMode !== 'anthropic' && getApiKey() && getAnthropicApiKey()) {
-        const gem = attempts.shift(); // Anthropic
-        attempts.splice(1, 0, gem); // keep Gemini first, Anthropic second
+    // In Anthropic-specific mode, try Anthropic first; otherwise prioritize fast Gemini
+    if (S.currentProviderMode === 'anthropic' && anthropicUsable) {
+        attempts.push(() => sendImagesToAnthropic(images, prompt));
+        if (getApiKey()) attempts.push(() => sendMultipleImagesToGeminiHttp(images, prompt));
+        if (getGroqApiKey()) attempts.push(() => sendImagesToGroqVision(images, prompt));
+    } else {
+        if (getApiKey()) attempts.push(() => sendMultipleImagesToGeminiHttp(images, prompt));
+        if (anthropicUsable) attempts.push(() => sendImagesToAnthropic(images, prompt));
+        if (getGroqApiKey()) attempts.push(() => sendImagesToGroqVision(images, prompt));
     }
 
     if (attempts.length === 0) {
-        return { success: false, error: 'No vision-capable API key configured — add a Gemini, Anthropic, or Groq key to analyze screenshots' };
+        return { success: false, error: 'No vision-capable API key configured (Gemini, Anthropic, or Groq required)' };
     }
 
     let lastError = 'Vision request failed';
     for (const attempt of attempts) {
-        const result = await attempt();
-        if (result && result.success) {
-            // Add OCR metadata to result
-            result.ocrAttempted = true;
-            result.ocrDuration = ocrDuration;
-            result.ocrInsufficient = !ocrResult.allSufficient;
-            return result;
+        try {
+            const result = await attempt();
+            if (result && result.success) {
+                return result;
+            }
+            lastError = (result && result.error) || lastError;
+            console.log('[Vision] Provider attempt failed, trying fallback:', lastError);
+        } catch (err) {
+            lastError = err.message || lastError;
+            console.error('[Vision] Provider threw exception:', err);
         }
-        lastError = (result && result.error) || lastError;
-        console.log('[Vision] provider failed, falling back:', lastError);
+        // Drop anything this provider streamed so a partial answer can't bleed
+        // into the next provider's output.
+        discardStreamUpdate();
     }
+
     return { success: false, error: lastError };
 }
 
