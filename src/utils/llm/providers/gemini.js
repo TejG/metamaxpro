@@ -28,7 +28,11 @@ async function listModels() {
     return GEMINI_TEXT_MODELS;
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null } = {}) {
+// `epoch` tags every stream update so the cascade can discard tokens that
+// arrive after it gave up on us; `controller` is how it stops us at all —
+// without a signal threaded into the SDK, an abandoned Gemini stream kept
+// typing into the answer bubble for as long as the model kept generating.
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null, epoch, controller = null } = {}) {
     const apiKey = getApiKey();
     if (!apiKey) return null;
 
@@ -60,9 +64,8 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
         console.log('[Gemini] answer using model:', chosenModel, reasoning ? '(reasoning)' : '(fast)');
 
         const skipThinkingConfig = _noThinkingConfigModels.has(chosenModel);
-        const config = skipThinkingConfig
-            ? { temperature: temperature }
-            : { ...(reasoning ? GEMINI_THINKING : GEMINI_NO_THINKING), temperature: temperature };
+        const baseConfig = { temperature: temperature, ...(controller ? { abortSignal: controller.signal } : {}) };
+        const config = skipThinkingConfig ? baseConfig : { ...(reasoning ? GEMINI_THINKING : GEMINI_NO_THINKING), ...baseConfig };
 
         let response;
         try {
@@ -73,7 +76,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
             if (!skipThinkingConfig && /400|INVALID_ARGUMENT/i.test(err.message || '')) {
                 console.warn('[Gemini] 400 with thinkingConfig — retrying without it (cached for future calls)');
                 _noThinkingConfigModels.add(chosenModel);
-                response = await ai.models.generateContentStream({ model: chosenModel, contents, config: { temperature: temperature } });
+                response = await ai.models.generateContentStream({ model: chosenModel, contents, config: baseConfig });
             } else {
                 throw err;
             }
@@ -89,7 +92,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
                     firstToken = false;
                 }
                 fullText += ct;
-                sendStreamUpdate(fullText);
+                sendStreamUpdate(fullText, epoch);
             }
         }
 
@@ -97,6 +100,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
         console.log('[Gemini] answer completed');
         return fullText.trim() || null;
     } catch (error) {
+        if (error.name === 'AbortError') return null;
         console.error('[Gemini] stream error:', error.message);
         return null;
     }

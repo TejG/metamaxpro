@@ -60,11 +60,15 @@ async function fetchWithAnthropicRetry(url, options, label = 'Anthropic', maxRet
     return null;
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null } = {}) {
+// `epoch` tags every stream update so the cascade can discard tokens that
+// arrive after it gave up on us. `controller` lets the cascade abort THIS
+// attempt only — see the ownership note on the finally block below.
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages: overrideMessages = null, epoch, controller = null } = {}) {
     const key = getAnthropicApiKey();
     if (!key) return null;
 
-    if (S.currentGroqAbortController) {
+    // Cancel a request left over from a previous question (not our own).
+    if (S.currentGroqAbortController && S.currentGroqAbortController !== controller) {
         S.currentGroqAbortController.abort();
         S.currentGroqAbortController = null;
     }
@@ -76,7 +80,8 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
     if (!messages.length) return null;
 
     try {
-        S.currentGroqAbortController = new AbortController();
+        const attemptController = controller || new AbortController();
+        S.currentGroqAbortController = attemptController;
         const response = await fetchWithAnthropicRetry(
             'https://api.anthropic.com/v1/messages',
             {
@@ -87,7 +92,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
                     'anthropic-beta': 'prompt-caching-2024-07-31',
                     'content-type': 'application/json',
                 },
-                signal: S.currentGroqAbortController.signal,
+                signal: attemptController.signal,
                 body: JSON.stringify({
                     model: 'claude-sonnet-4-6',
                     max_tokens: reasoning ? 2048 : 1024,
@@ -141,7 +146,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
                             firstToken = false;
                         }
                         fullText += json.delta.text;
-                        sendStreamUpdate(fullText);
+                        sendStreamUpdate(fullText, epoch);
                     }
                 } catch (_) {
                     /* skip */
@@ -156,7 +161,12 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages: ov
         console.error('[Anthropic] stream error:', error.message);
         return null;
     } finally {
-        S.currentGroqAbortController = null;
+        // Only release the shared slot if it's still OURS — see the same note
+        // in the Groq adapter. An abandoned attempt unwinds late, and nulling
+        // unconditionally wiped out the next provider's controller.
+        if (!controller || S.currentGroqAbortController === controller) {
+            S.currentGroqAbortController = null;
+        }
     }
 }
 

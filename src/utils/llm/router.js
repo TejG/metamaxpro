@@ -1,7 +1,7 @@
 // Text-answer routing: the cross-provider cascade (Groq / Anthropic / Gemini),
 // the Anthropic sequential queue, transcription-cleaning middleware, and the
 // silence-timer trigger that turns a finished utterance into an answer.
-const { S, sendToRenderer, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate } = require('./state');
+const { S, sendToRenderer, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate, newStreamEpoch, streamTokenCount } = require('./state');
 const {
     SILENCE_THRESHOLD_MS,
     INCOMPLETE_TRAILING_WORDS,
@@ -80,6 +80,10 @@ async function routeAnswer(transcription) {
     }
     S.lastProcessedIntent = intent;
 
+    // Invalidate any stream still trickling in from the previous question so it
+    // can't type into the bubble we are about to create.
+    newStreamEpoch();
+
     // Question bubble (left) + answer placeholder (right).
     sendToRenderer('new-question', intent);
     sendToRenderer('new-response', '...');
@@ -125,28 +129,69 @@ async function routeAnswer(transcription) {
     const isInterviewMode = S.currentProfile === 'job_interview' || S.currentProfile === 'interview' || S.currentProfile === 'meeting';
     const temperature = reasoning ? 0.1 : isInterviewMode ? 0.2 : 0.4;
 
-    // Cascade: first provider that returns text wins. Each provider gets a hard
-    // timeout — if it hasn't produced anything (no error, just slow/hanging) we
-    // abort it and move on rather than let it silently eat the whole budget.
-    // This is what kept 20-30s worst-case replies from happening: previously a
-    // stalled provider had no ceiling before falling through to the next one.
-    // Reasoning answers need the model to actually think, so they get a wider
-    // ceiling (a fast 8s abort would kill the reasoning that makes them correct).
-    const PROVIDER_TIMEOUT_MS = reasoning ? 22000 : 8000;
-    async function withTimeout(promiseFactory) {
+    // Cascade: first provider that returns text wins, and each provider gets a
+    // latency budget so one stalled provider can't eat the whole answer.
+    //
+    // The budget is on TIME-TO-FIRST-TOKEN, not on total completion. Capping
+    // total time is what produced the "could not get an answer from any
+    // configured provider" banner on questions that every provider was in fact
+    // answering: a long answer over a big resume/JD context routinely runs past
+    // a fixed 8s wall, so the provider got aborted mid-sentence, its partial
+    // text discarded, and the next two providers were each killed the same way
+    // — three healthy providers, ~24s, and a banner blaming the API keys.
+    //
+    // Silence before the first token is the thing actually worth aborting. Once
+    // tokens are flowing the provider is working, so it gets the (much wider)
+    // hard ceiling to finish.
+    const TTFT_BUDGET_MS = reasoning ? 20000 : 7000;
+    const HARD_BUDGET_MS = reasoning ? 60000 : 30000;
+
+    // Why each provider didn't answer, so a failure can say something true
+    // instead of always pointing at the API keys.
+    const failures = [];
+
+    async function attempt(adapter) {
+        // Own epoch + own AbortController per attempt: the epoch drops late
+        // tokens from this attempt once we've moved on, and a private
+        // controller means aborting THIS provider can't cancel the next one.
+        const epoch = newStreamEpoch();
+        const controller = new AbortController();
         let timedOut = false;
-        const timeout = new Promise(resolve => {
-            setTimeout(() => {
+        let timer = null;
+
+        const deadline = new Promise(resolve => {
+            const giveUp = () => {
                 timedOut = true;
+                controller.abort();
                 resolve(null);
-            }, PROVIDER_TIMEOUT_MS);
+            };
+            timer = setTimeout(() => {
+                if (streamTokenCount(epoch) > 0) {
+                    // Already streaming — let it finish, but not forever.
+                    timer = setTimeout(giveUp, HARD_BUDGET_MS - TTFT_BUDGET_MS);
+                    return;
+                }
+                giveUp();
+            }, TTFT_BUDGET_MS);
         });
-        const result = await Promise.race([promiseFactory(), timeout]);
-        if (timedOut && S.currentGroqAbortController) {
-            S.currentGroqAbortController.abort();
-            S.currentGroqAbortController = null;
+
+        try {
+            const result = await Promise.race([adapter.streamAnswer({ reasoning, temperature, epoch, controller }), deadline]);
+            if (timedOut) {
+                const stalled =
+                    streamTokenCount(epoch) > 0 ? `stopped responding mid-answer` : `no response in ${Math.round(TTFT_BUDGET_MS / 1000)}s`;
+                console.log(`[routeAnswer] ${adapter.name} timed out (${stalled})`);
+                failures.push(`${adapter.name} ${stalled}`);
+                return null;
+            }
+            if (result == null || !result.trim()) {
+                failures.push(`${adapter.name} request failed`);
+                return null;
+            }
+            return result;
+        } finally {
+            if (timer) clearTimeout(timer);
         }
-        return result;
     }
 
     let answer = null;
@@ -161,19 +206,33 @@ async function routeAnswer(transcription) {
 
     for (const adapter of lane) {
         if (answer != null) break;
-        if (!adapter.isAvailable()) continue;
+        if (!adapter.isAvailable()) {
+            failures.push(`${adapter.name} has no API key`);
+            continue;
+        }
         // Circuit breaker: skip providers known to be down (quota/credit
         // exhausted) instead of paying a failed round-trip on every question.
         if (health.isDown(adapter.name)) {
             console.log(`[routeAnswer] skipping ${adapter.name} (circuit open)`);
+            failures.push(`${adapter.name} is cooling down after a recent failure`);
             continue;
         }
-        answer = await withTimeout(() => adapter.streamAnswer({ reasoning, temperature }));
-        if (answer == null) discardStreamUpdate();
+        answer = await attempt(adapter);
     }
 
     if (answer == null || !answer.trim()) {
-        sendToRenderer('update-response', '⚠️ Could not get an answer from any configured provider. Check your API keys in Settings.');
+        discardStreamUpdate();
+        // Say WHICH provider failed and how. The old banner always blamed the
+        // API keys, which sent people to Settings to fix keys that were fine.
+        const anyConfigured = lane.some(a => a.isAvailable());
+        const detail = failures.join('; ');
+        sendToRenderer(
+            'update-response',
+            anyConfigured
+                ? `⚠️ No answer this time — ${detail}. Ask again, or check Settings if this keeps happening.`
+                : '⚠️ No AI provider is configured. Add a Groq, Anthropic, or Gemini API key in Settings.'
+        );
+        console.error('[routeAnswer] all providers failed:', detail);
         sendToRenderer('update-status', 'Listening...');
         return;
     }

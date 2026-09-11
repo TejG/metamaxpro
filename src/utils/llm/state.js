@@ -102,7 +102,38 @@ function _flushStream() {
     sendToRenderer('update-response', data);
 }
 
-function sendStreamUpdate(data) {
+// ── Stream ownership (epoch) ────────────────────────────────────────
+// The answer cascade abandons a provider when it blows its latency budget, but
+// an abandoned HTTP stream keeps delivering tokens for seconds afterwards — it
+// only stops when the abort actually lands. Without an ownership check those
+// late tokens call sendStreamUpdate and overwrite whatever is in the answer
+// bubble by then: the NEXT provider's answer, or the failure banner. Each
+// attempt claims an epoch and passes it with every update; updates from a
+// superseded epoch are dropped.
+let _streamEpoch = 0;
+let _streamUpdateCount = 0;
+
+// Claim a fresh epoch, invalidating every in-flight stream that came before it.
+function newStreamEpoch() {
+    _streamEpoch++;
+    _streamUpdateCount = 0;
+    discardStreamUpdate();
+    return _streamEpoch;
+}
+
+// How many updates the given epoch has emitted. The cascade uses this to tell
+// "hasn't said a word yet" (abort it) from "actively streaming" (let it finish).
+function streamTokenCount(epoch) {
+    return epoch === _streamEpoch ? _streamUpdateCount : 0;
+}
+
+function sendStreamUpdate(data, epoch) {
+    // Callers that pass an epoch opt into ownership checking; the ones that
+    // don't (vision, debrief) are the only stream running and stay unguarded.
+    if (epoch !== undefined) {
+        if (epoch !== _streamEpoch) return;
+        _streamUpdateCount++;
+    }
     _streamPendingData = data;
     const elapsed = Date.now() - _streamLastSent;
     if (elapsed >= STREAM_THROTTLE_MS) {
@@ -117,7 +148,8 @@ function sendStreamUpdate(data) {
 // Force out any pending partial text NOW (call when a stream ends or is
 // replaced) so the final answer is complete and the next stream can't
 // interleave with a stale scheduled flush.
-function flushStreamUpdate() {
+function flushStreamUpdate(epoch) {
+    if (epoch !== undefined && epoch !== _streamEpoch) return;
     if (_streamFlushTimer) {
         clearTimeout(_streamFlushTimer);
         _streamFlushTimer = null;
@@ -135,4 +167,13 @@ function discardStreamUpdate() {
     _streamPendingData = null;
 }
 
-module.exports = { S, sendToRenderer, sendStreamUpdate, flushStreamUpdate, discardStreamUpdate, getLocalAi };
+module.exports = {
+    S,
+    sendToRenderer,
+    sendStreamUpdate,
+    flushStreamUpdate,
+    discardStreamUpdate,
+    newStreamEpoch,
+    streamTokenCount,
+    getLocalAi,
+};

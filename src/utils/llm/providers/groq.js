@@ -51,11 +51,15 @@ function isAvailable() {
     return !!(key && key.trim());
 }
 
-async function streamAnswer({ reasoning = false, temperature = 0.4, messages = null } = {}) {
+// `epoch` tags every stream update so the cascade can discard tokens that
+// arrive after it gave up on us. `controller` lets the cascade abort THIS
+// attempt only — see the ownership note on the finally block below.
+async function streamAnswer({ reasoning = false, temperature = 0.4, messages = null, epoch, controller = null } = {}) {
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) return null;
 
-    if (S.currentGroqAbortController) {
+    // Cancel a request left over from a previous question (not our own).
+    if (S.currentGroqAbortController && S.currentGroqAbortController !== controller) {
         S.currentGroqAbortController.abort();
         S.currentGroqAbortController = null;
     }
@@ -96,11 +100,14 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages = n
             if (/gpt-oss/i.test(candidate)) body.reasoning_effort = reasoning ? 'high' : 'low';
             else if (/qwen/i.test(candidate)) body.reasoning_effort = reasoning ? 'default' : 'none';
 
-            S.currentGroqAbortController = new AbortController();
+            // Reuse the cascade's controller across candidates when it gave us
+            // one, so an abort applies to whichever candidate is in flight.
+            const attemptController = controller || new AbortController();
+            S.currentGroqAbortController = attemptController;
             const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-                signal: S.currentGroqAbortController.signal,
+                signal: attemptController.signal,
                 body: JSON.stringify(body),
             });
 
@@ -153,7 +160,7 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages = n
                         if (inThinkBlock && fullText.includes('</think>')) inThinkBlock = false;
                         if (!inThinkBlock) {
                             const disp = stripThinkingTags(fullText);
-                            if (disp) sendStreamUpdate(disp);
+                            if (disp) sendStreamUpdate(disp, epoch);
                         }
                     }
                 } catch (_) {
@@ -171,7 +178,13 @@ async function streamAnswer({ reasoning = false, temperature = 0.4, messages = n
         console.error('[Groq] stream error:', error.message);
         return null;
     } finally {
-        S.currentGroqAbortController = null;
+        // Only release the shared slot if it's still OURS. An abandoned attempt
+        // unwinds long after the cascade moved on, and blindly nulling here
+        // wiped out the next provider's controller — leaving that request with
+        // no way to be aborted and its stale tokens free to overwrite the UI.
+        if (!controller || S.currentGroqAbortController === controller) {
+            S.currentGroqAbortController = null;
+        }
     }
 }
 
