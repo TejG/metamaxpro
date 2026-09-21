@@ -121,7 +121,16 @@ async function routeAnswer(transcription) {
     // Adaptive effort: aptitude/quantitative/logic questions must be worked out,
     // so they get a reasoning-capable model + low temperature + a longer latency
     // budget. Everyday conversational questions stay on the fast path.
-    const reasoning = questionNeedsReasoning(intent);
+    //
+    // Coding and system-design sessions ALWAYS take that path: their answers
+    // carry full working code or a complete architecture, so they need the
+    // reasoning budget (2048 output tokens, wider latency ceiling, temperature
+    // 0.1) no matter how the question is phrased. questionNeedsReasoning only
+    // fires on arithmetic/aptitude wording — "write a function to reverse a
+    // linked list" matches none of it, so these answers were previously
+    // generated at temperature 0.4 and truncated at 1024 tokens mid-function.
+    const isTechnicalProfile = S.currentProfile === 'coding' || S.currentProfile === 'system_design';
+    const reasoning = isTechnicalProfile || questionNeedsReasoning(intent);
     if (reasoning) sendToRenderer('update-status', 'Working it out…');
 
     // Temperature control: interview mode uses 0.2 to reduce hallucination risk,

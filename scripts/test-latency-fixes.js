@@ -62,7 +62,12 @@ test('gemini adapter caches models that reject thinkingConfig', () => {
 });
 
 test('cached models skip thinkingConfig on first attempt', () => {
-    assert(/skipThinkingConfig\s*\?\s*\{ temperature/.test(geminiSrc), 'skip path missing');
+    // v0.11.5 hoisted the shared generation params into `baseConfig` so the
+    // cascade's abort signal could be threaded in. The skip path still sends
+    // only those params, with no thinkingConfig attached.
+    assert(/skipThinkingConfig \? baseConfig :/.test(geminiSrc), 'skip path missing');
+    assert(/const baseConfig = \{ temperature/.test(geminiSrc), 'baseConfig lost temperature');
+    assert(!/const baseConfig = \{[^}]*GEMINI_THINKING/.test(geminiSrc), 'baseConfig must not carry thinkingConfig');
 });
 
 // ── Fix 3: system prompt slimmed (CODE_COMPONENT removed) ──
@@ -88,8 +93,18 @@ test('prompt size sanity: CODE_COMPONENT removal saved ~2.4k chars', () => {
 
 // ── Cascade guards unchanged ──
 
-test('conversational provider timeout still 8s', () => {
-    assert(/reasoning \? 22000 : 8000/.test(routerSrc));
+// v0.11.5 replaced the total-completion cap (8s / 22s) with a time-to-first-
+// token budget plus a wider hard ceiling. Capping total time was killing long
+// answers mid-sentence and producing the "no configured provider" banner, so
+// this now guards the TTFT shape rather than the old fixed wall.
+test('conversational provider budget is on TTFT, not total time', () => {
+    assert(/TTFT_BUDGET_MS = reasoning \? 20000 : 7000/.test(routerSrc));
+    assert(/HARD_BUDGET_MS = reasoning \? 60000 : 30000/.test(routerSrc));
+    assert(!/reasoning \? 22000 : 8000/.test(routerSrc), 'the old total-time cap is back');
+});
+
+test('a provider that is already streaming is not aborted at the TTFT budget', () => {
+    assert(/streamTokenCount\(epoch\) > 0/.test(routerSrc));
 });
 
 test('Groq still leads the conversational lane', () => {
