@@ -339,40 +339,44 @@ function labelsIntact(src) {
     const av = fs.readFileSync(path.join(ROOT, 'src/components/views/AssistantView.js'), 'utf8');
     check('the view imports the generator', /import \{[^}]*generateDiagram[^}]*\} from '\.\.\/diagramIntelligence\.js'/.test(av));
     check('it asks for an architecture, not a guess', /prefer: 'architecture'/.test(av));
-    check('answers carry their prose next to the diagram', /data-prose="\$\{this\._b64/.test(av));
+    check('answers carry their prose next to the diagram', /mermaidBlocksToDivs\(rendered, prose\)/.test(av));
+    // The attribute itself is emitted by the shared helper, so assert it there
+    // too: extracting that helper once already dropped the attribute and left
+    // the whole rebuild path as dead code that no test noticed.
+    const merSrc = fs.readFileSync(path.join(ROOT, 'src/components/mermaid.js'), 'utf8');
+    check('the shared helper emits it', /data-prose="' \+ encodeDiagram\(prose\)/.test(merSrc));
+    check('the helper omits it when there is no prose', /const proseAttr = prose \? /.test(merSrc));
     check('the view uses the shared prose extractor', /import \{ generateDiagram, diagramProse \}/.test(av) && !/_diagramProse/.test(av));
-    check('only System Design carries it', /const proseAttr = singleColumn \?/.test(av));
+    check('only System Design carries it', /const prose = singleColumn \? diagramProse\(content\) : '';/.test(av));
     check('a reconstruction needs diagram intent', /AssistantView\.DIAGRAM_INTENT\.test\(content\)/.test(av));
     check('intent means the phase 4 headings', /WHAT EACH BLOCK DOES\|HOW DATA FLOWS/.test(av));
 
     // The gate is read straight out of the view and tested against the real
-    // prompt, so the two cannot drift. Phase 3 narrates "Write path:" and
-    // "Read path:" while explicitly saying "Still no diagram" — an earlier
-    // version of this gate matched those and drew the architecture a whole
-    // phase before the interview is supposed to see it.
+    // prompt, so the two cannot drift. The prompt used to withhold the diagram
+    // until a fourth phase; it now asks for one in every answer, as part 2 of
+    // four. Either way the rule is the same: the gate must fire for an answer
+    // that MEANT to draw an architecture, and for nothing else.
     const intentSrc = av.match(/static DIAGRAM_INTENT = (\/.*\/i);/);
     check('the gate is a findable regex', !!intentSrc);
     if (intentSrc) {
         const INTENT = eval(intentSrc[1]); // eslint-disable-line no-eval
         const prompt = prompts.profilePrompts.system_design;
-        const phase4At = prompt.indexOf('PHASE 4 - ARCHITECTURE DIAGRAM');
-        check('the prompt still has a phase 4', phase4At > 0);
-        const before = prompt.slice(0, phase4At);
-        const phase4 = prompt.slice(phase4At);
-        check('phase 4 trips the gate', INTENT.test(phase4));
-        check('nothing before phase 4 trips it', !INTENT.test(before), (before.match(INTENT) || [])[0] || '');
+        check('the prompt still asks for a diagram', /```mermaid/.test(prompt));
+        check('the prompt trips the gate', INTENT.test(prompt));
+        // Each heading the gate keys on must still exist in the prompt. Rename
+        // one and the gate silently stops firing — no error, just no diagram.
+        const headings = intentSrc[1]
+            .replace(/^\/\\b\(|\)\\b\/i$/g, '')
+            .split('|')
+            .map(h => h.replace(/\\/g, ''));
+        check('the gate keys on at least two headings', headings.length >= 2, headings.join(' / '));
+        for (const h of headings) check(`the prompt still says "${h}"`, prompt.includes(h), h);
         check(
-            'a phase 1 scoping answer draws nothing',
-            !INTENT.test(
-                'Good question. Before I design anything, let me scope it. What scale are we targeting - 10 million DAU or 500 million? Strong or eventual consistency?'
-            )
+            'a scoping-only answer draws nothing',
+            !INTENT.test("I'll assume ten million daily users and a read-heavy workload - stop me if that's off. What consistency do you need?")
         );
-        check(
-            'a phase 3 design walkthrough draws nothing',
-            !INTENT.test(
-                'Write path: request enters at the gateway, then the write service, durable in the primary. Read path: request enters at the CDN, cache checked at Redis, fallback to the replica.'
-            )
-        );
+        check('ordinary prose draws nothing', !INTENT.test(PROSE));
+        check("another profile's answer draws nothing", !INTENT.test(prompts.profilePrompts.behavioral));
     }
     check("it never overwrites the model's own fence", /!\/class="mermaid"\/\.test\(rendered\) &&/.test(av));
     check('the rebuild is the LAST render variant', av.indexOf('...mermaidFallbacks(code), rebuilt') > 0);

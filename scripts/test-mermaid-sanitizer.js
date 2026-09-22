@@ -259,7 +259,7 @@ function labelsIntact(line) {
     // the whole point of carrying the narration alongside the fence.
     check(
         'renderer skips non-diagram content instead of erroring',
-        /!looksLikeGraph\(code\)\) && !\(rebuilt && rebuilt\.mermaid\)\) continue;/.test(av)
+        /!looksLikeGraph\(code\) && !\(rebuilt && rebuilt\.mermaid\)\) continue;/.test(av)
     );
     check('fence extraction is case-insensitive', /language-mermaid[\s\S]{0,60}\/gi,/.test(mm));
     check('renderer tries the canonical rebuild', /toCanonicalFlowchart\(raw\)/.test(av));

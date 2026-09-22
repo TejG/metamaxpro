@@ -312,10 +312,16 @@ export function decodeDiagram(encoded) {
 // <div class="mermaid" data-code="base64"> placeholders that the debounced
 // renderer in AssistantView picks up. Case-insensitive so ```Mermaid /
 // ```MERMAID fences work too.
-export function mermaidBlocksToDivs(html) {
+export function mermaidBlocksToDivs(html, prose) {
+    // `prose` is the answer's narration. It rides along on the element so that a
+    // spec which will not parse can still be rebuilt from the explanation rather
+    // than leaving a grey apology where the architecture should be — see
+    // _rebuildFromProse in AssistantView. Without it that whole recovery path is
+    // dead code, which is exactly what happened when this helper was extracted.
+    const proseAttr = prose ? ' data-prose="' + encodeDiagram(prose) + '"' : '';
     return String(html || '').replace(
         /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/gi,
-        (_, code) => '<div class="mermaid" data-code="' + encodeDiagram(decodeEntities(code)) + '"></div>'
+        (_, code) => '<div class="mermaid" data-code="' + encodeDiagram(decodeEntities(code)) + '"' + proseAttr + '></div>'
     );
 }
 

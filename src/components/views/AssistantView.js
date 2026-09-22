@@ -1,6 +1,16 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { PROFILE_LABELS } from '../profiles.js';
-import { sanitizeMermaid, mermaidFallbacks, ensureDiagramHeader, looksLikeGraph, toCanonicalFlowchart, mermaidBlocksToDivs, closeUnclosedMermaidFence, decodeDiagram } from '../mermaid.js';
+import {
+    sanitizeMermaid,
+    mermaidFallbacks,
+    ensureDiagramHeader,
+    looksLikeGraph,
+    toCanonicalFlowchart,
+    mermaidBlocksToDivs,
+    closeUnclosedMermaidFence,
+    encodeDiagram,
+    decodeDiagram,
+} from '../mermaid.js';
 import { generateDiagram, diagramProse } from '../diagramIntelligence.js';
 
 export class AssistantView extends LitElement {
@@ -1070,8 +1080,21 @@ export class AssistantView extends LitElement {
                 const normalized = closeUnclosedMermaidFence(content);
                 let rendered = window.marked.parse(normalized);
                 rendered = this.wrapWordsInSpans(rendered);
-                // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
-                rendered = mermaidBlocksToDivs(rendered);
+                // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues.
+                // System Design answers also carry their narration, so a diagram
+                // that will not parse can be rebuilt from the explanation.
+                const prose = singleColumn ? diagramProse(content) : '';
+                rendered = mermaidBlocksToDivs(rendered, prose);
+                // The answer describes an architecture but no fence survived —
+                // draw what it just described in words rather than nothing.
+                if (prose && !/class="mermaid"/.test(rendered) && AssistantView.DIAGRAM_INTENT.test(content)) {
+                    const rebuilt = generateDiagram({ text: prose, prefer: 'architecture' });
+                    if (rebuilt.mermaid) {
+                        rendered +=
+                            `<div class="mermaid" data-code="${encodeDiagram(rebuilt.mermaid)}"` +
+                            ` data-prose="${encodeDiagram(prose)}" data-reconstructed="1"></div>`;
+                    }
+                }
                 // Deterministic two-column layout: ANY answer with a code
                 // block + meaningful prose renders side-by-side (explanation
                 // left, code right) — not dependent on the model emitting
@@ -1696,30 +1719,44 @@ export class AssistantView extends LitElement {
                         const raw = decodeDiagram(encoded);
                         const code = ensureDiagramHeader(sanitizeMermaid(raw));
                         const rebuilt = this._rebuildFromProse(el);
-                        if ((!looksLikeGraph(code)) && !(rebuilt && rebuilt.mermaid)) continue;
+                        if (!looksLikeGraph(code) && !(rebuilt && rebuilt.mermaid)) continue;
                         // Try the repaired diagram, then the canonical
                         // rebuild, then progressively simpler fallbacks, then
                         // the prose rebuild — before ever showing an error.
                         const candidates = [...new Set([code, toCanonicalFlowchart(raw), ...mermaidFallbacks(code), rebuilt && rebuilt.mermaid])];
                         let svg = null;
                         let reason = 'unknown';
+                        let drewRebuild = false;
                         for (const candidate of candidates) {
                             if (!candidate) continue;
                             try {
                                 const id = 'mermaid-svg-' + i + '-' + Date.now();
                                 ({ svg } = await window.mermaid.render(id, candidate));
+                                drewRebuild = !!rebuilt && candidate === rebuilt.mermaid;
                                 break;
                             } catch (e) {
                                 reason = ((e && e.message) || 'unknown').replace(/\s+/g, ' ');
                             }
                         }
+                        const isRebuild = drewRebuild || el.hasAttribute('data-reconstructed');
                         if (svg) {
                             el.innerHTML = svg;
+                            // Say so when the picture is ours and not the
+                            // model's. An unlabeled reconstruction presented as
+                            // the interviewer's own diagram is the one outcome
+                            // worse than showing no diagram at all.
+                            if (isRebuild) el.insertAdjacentHTML('beforeend', this._diagramNoteHtml());
                         } else {
                             console.warn('all variants failed. source was:', raw);
-                            el.innerHTML = `<div class="mermaid-error">Diagram unavailable (${reason})</div>`;
+                            // A text rendering of the same graph beats an
+                            // apology; the error line is the last resort.
+                            el.innerHTML = this._asciiDiagramHtml(el) || `<div class="mermaid-error">Diagram unavailable (${reason})</div>`;
                         }
-                        el.setAttribute('data-rendered', '1');
+                        // A diagram drawn from the prose is provisional: the
+                        // model's own may still be streaming in. Leaving it
+                        // unmarked lets a later pass replace it with the real
+                        // one, which data-rendered would otherwise block.
+                        if (!isRebuild) el.setAttribute('data-rendered', '1');
                     }
                 }, 400);
             }
