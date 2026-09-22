@@ -193,6 +193,28 @@ async function main() {
             assert(headers.length === 1, 'candidate kept a doubled header:\n' + c);
         }
     });
+    check('a zero-width space before the header cannot smuggle in a second one', () => {
+        // Regression: the model sometimes emits U+200B before "flowchart LR".
+        // trim() does not remove it, so the header went unrecognized, a second
+        // header was prepended, and the parser died on line 2 showing what
+        // looked exactly like "flowchart LR". The strip must leave no
+        // invisible characters and exactly one header on every candidate.
+        const zwsp = String.fromCharCode(0x200b);
+        const raws = [
+            zwsp + 'flowchart LR\n    Client["Web"] --> LB["ALB"]',
+            zwsp + 'flowchart LR\nflowchart LR\n    Client["Web"] --> LB["ALB"]',
+        ];
+        for (const raw of raws) {
+            const code = M.ensureDiagramHeader(M.sanitizeMermaid(raw));
+            const candidates = [code, M.toCanonicalFlowchart(raw), ...M.mermaidFallbacks(code)].filter(Boolean);
+            assert(candidates.length > 0, 'no candidates produced');
+            for (const c of candidates) {
+                const headers = c.split('\n').filter(l => /^(flowchart|graph)\b/i.test(l.trim()));
+                assert(headers.length === 1, 'candidate has a bad header count:\n' + JSON.stringify(c));
+                assert(!/[\u200B-\u200D\u2060\u180E\uFEFF]/.test(c), 'invisible character survived sanitizing');
+            }
+        }
+    });
 
     console.log('\n6. prompt + router wiring');
     check('system_design prompt demands a complete closed diagram, spoken', () => {

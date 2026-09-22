@@ -63,6 +63,17 @@ export function sanitizeMermaidLine(line) {
 const DIAGRAM_TYPE =
     /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|requirementDiagram|C4Context|sankey|xychart|block|architecture)\b/i;
 
+// Zero-width / invisible characters the model sometimes emits — notably a
+// U+200B zero-width space before the header. String.trim() does NOT remove
+// them, so they defeat the DIAGRAM_TYPE check above: the header goes
+// unrecognized, a second header gets prepended, and the parser dies on
+// line 2 with what looks exactly like "flowchart LR". Strip them before
+// anything else touches the text.
+const INVISIBLE_CHARS = /[\u200B-\u200D\u2060\u180E\uFEFF]/g;
+export function stripInvisibleChars(s) {
+    return String(s || '').replace(INVISIBLE_CHARS, '');
+}
+
 // Is there any graph structure here at all? Distinguishes a header-less diagram
 // (fixable) from prose the model dropped into a mermaid fence (nothing to draw).
 export function looksLikeGraph(text) {
@@ -95,7 +106,7 @@ export function ensureDiagramHeader(code) {
 // Repair a full Mermaid document.
 export function sanitizeMermaid(raw) {
     return (
-        String(raw || '')
+        stripInvisibleChars(raw)
             .replace(/```\s*"?\s*$/, '') // stray closing fence the model left in
             .trim()
             .split('\n')
@@ -198,7 +209,7 @@ function parseNodeToken(token) {
 // Rebuild a diagram as canonical Mermaid. Returns '' when there is no graph to
 // draw, so callers can stay silent rather than show an error.
 export function toCanonicalFlowchart(raw) {
-    const text = String(raw || '').replace(/```[a-z]*\s*$/i, '');
+    const text = stripInvisibleChars(raw).replace(/```[a-z]*\s*$/i, '');
     const nodes = new Map(); // id -> label
     const edges = [];
     const seenEdge = new Set();
