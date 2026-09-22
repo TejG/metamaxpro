@@ -243,6 +243,9 @@ function labelsIntact(line) {
 
     console.log('— the renderer uses it, and never dumps raw source —');
     const av = fs.readFileSync(path.join(ROOT, 'src/components/views/AssistantView.js'), 'utf8');
+    // The fence-extraction helper lives in the shared module (single mermaid
+    // pipeline); AssistantView calls it via mermaidBlocksToDivs.
+    const mm = fs.readFileSync(path.join(ROOT, 'src/components/mermaid.js'), 'utf8');
     check('AssistantView imports the shared sanitizer', /import \{[^}]*sanitizeMermaid[^}]*\} from '\.\.\/mermaid\.js'/.test(av));
     check('no inlined copy of the sanitizer remains', !/subgraph\\s\+/.test(av), 'AssistantView still has its own subgraph regex');
     check('diagram failure does not render a code block', !/<pre[^>]*>\$\{code\}<\/pre>/.test(av));
@@ -258,7 +261,7 @@ function labelsIntact(line) {
         'renderer skips non-diagram content instead of erroring',
         /!looksLikeGraph\(code\)\) && !\(rebuilt && rebuilt\.mermaid\)\) continue;/.test(av)
     );
-    check('fence extraction is case-insensitive', /language-mermaid[\s\S]{0,60}\/gi,/.test(av));
+    check('fence extraction is case-insensitive', /language-mermaid[\s\S]{0,60}\/gi,/.test(mm));
     check('renderer tries the canonical rebuild', /toCanonicalFlowchart\(raw\)/.test(av));
     check('canonical is tried before the crude fallbacks', av.indexOf('toCanonicalFlowchart(raw)') < av.indexOf('...mermaidFallbacks(code)'));
     check('variants are de-duplicated', /new Set\(\[code, toCanonicalFlowchart\(raw\)/.test(av));

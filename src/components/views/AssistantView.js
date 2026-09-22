@@ -1,6 +1,6 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { PROFILE_LABELS } from '../profiles.js';
-import { sanitizeMermaid, mermaidFallbacks, ensureDiagramHeader, looksLikeGraph, toCanonicalFlowchart } from '../mermaid.js';
+import { sanitizeMermaid, mermaidFallbacks, ensureDiagramHeader, looksLikeGraph, toCanonicalFlowchart, mermaidBlocksToDivs, closeUnclosedMermaidFence, decodeDiagram } from '../mermaid.js';
 import { generateDiagram, diagramProse } from '../diagramIntelligence.js';
 
 export class AssistantView extends LitElement {
@@ -553,6 +553,20 @@ export class AssistantView extends LitElement {
             color: #f5f5f5 !important;
         }
 
+        /* Breathing room inside every box: with htmlLabels on, mermaid
+           measures the label div, so padding here grows the box instead of
+           crowding the text against its edges. */
+        .response-container .mermaid svg .label,
+        .response-container .mermaid svg .nodeLabel {
+            padding: 10px 16px !important;
+            line-height: 1.5 !important;
+        }
+
+        .response-container .mermaid svg .cluster-label,
+        .response-container .mermaid svg .node .label {
+            letter-spacing: 0.01em;
+        }
+
         /* ── Response navigation strip ── */
 
         .response-nav {
@@ -990,12 +1004,10 @@ export class AssistantView extends LitElement {
     // withholds the diagram until the design has been communicated, so a
     // reconstruction only ever appears for an answer that MEANT to draw one:
     // never over the scoping questions of phase 1 or the playback of phase 2.
-    // These three headings are emitted ONLY by phase 4. "THE DIAGRAM" and the
-    // write/read path lines were in this list and had to come out: phase 3 says
-    // "Still no diagram" and yet narrates "Write path:" / "Read path:", so those
-    // markers would have drawn the architecture a full phase early and undone
-    // the staging the prompt is built around.
-    static DIAGRAM_INTENT = /\b(WHAT EACH BLOCK DOES|HOW DATA FLOWS|SCALING AND FAILURE)\b/i;
+    // Phase-4-era markers were (WHAT EACH BLOCK DOES|HOW DATA FLOWS|SCALING AND
+    // FAILURE). The prompt is now a single spoken answer; these three headings
+    // are emitted ONLY by a system-design answer that MEANT to draw a diagram.
+    static DIAGRAM_INTENT = /\b(THE DIAGRAM|TALK IT THROUGH|THE CALLS YOU'D DEFEND)\b/i;
 
     _b64(text) {
         try {
@@ -1055,16 +1067,11 @@ export class AssistantView extends LitElement {
                     gfm: true,
                     sanitize: false,
                 });
-                const MF = window.MermaidFormat || null;
-                // A stream cut off mid-diagram leaves the ```mermaid fence
-                // unclosed; marked would swallow it as a paragraph and no
-                // diagram would render. Auto-close it so a partial diagram
-                // still renders (it re-renders as more chunks arrive).
-                const normalized = MF ? MF.closeUnclosedMermaidFence(content) : content;
+                const normalized = closeUnclosedMermaidFence(content);
                 let rendered = window.marked.parse(normalized);
                 rendered = this.wrapWordsInSpans(rendered);
                 // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
-                rendered = MF ? MF.mermaidBlocksToDivs(rendered) : rendered;
+                rendered = mermaidBlocksToDivs(rendered);
                 // Deterministic two-column layout: ANY answer with a code
                 // block + meaningful prose renders side-by-side (explanation
                 // left, code right) — not dependent on the model emitting
@@ -1133,8 +1140,7 @@ export class AssistantView extends LitElement {
             // placeholder conversion as the normal path, otherwise the
             // debounced renderer never picks them up and the user sees raw
             // mermaid source instead of a diagram.
-            const MF = typeof window !== 'undefined' ? window.MermaidFormat : null;
-            if (MF) rightHtml = MF.mermaidBlocksToDivs(rightHtml);
+            rightHtml = mermaidBlocksToDivs(rightHtml);
 
             // Anything before/after the component (rare) renders as normal markdown.
             const before = content.slice(0, m.index).trim();
@@ -1677,7 +1683,6 @@ export class AssistantView extends LitElement {
             if (typeof window !== 'undefined' && window.mermaid && container.querySelector('.mermaid')) {
                 if (this._mermaidTimer) clearTimeout(this._mermaidTimer);
                 this._mermaidTimer = setTimeout(async () => {
-                    const MF = window.MermaidFormat || null;
                     const diagrams = container.querySelectorAll('.mermaid');
                     if (!diagrams.length) return;
                     for (let i = 0; i < diagrams.length; i++) {
@@ -1688,17 +1693,33 @@ export class AssistantView extends LitElement {
                         if (el.getAttribute('data-rendered') === '1') continue;
                         const encoded = el.getAttribute('data-code');
                         if (!encoded) continue;
-                        const code = MF ? MF.sanitizeMermaidCode(encoded) : decodeURIComponent(escape(atob(encoded)));
-                        try {
-                            const id = 'mermaid-svg-' + i + '-' + Date.now();
-                            const { svg } = await window.mermaid.render(id, code);
-                            el.innerHTML = svg;
-                            el.setAttribute('data-rendered', '1');
-                        } catch (e) {
-                            console.warn('Mermaid render error:', e);
-                            el.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:8px;">Diagram error: ${e.message}</div><pre style="color:#999;font-size:10px;overflow-x:auto;">${code}</pre>`;
-                            el.setAttribute('data-rendered', '1');
+                        const raw = decodeDiagram(encoded);
+                        const code = ensureDiagramHeader(sanitizeMermaid(raw));
+                        const rebuilt = this._rebuildFromProse(el);
+                        if ((!looksLikeGraph(code)) && !(rebuilt && rebuilt.mermaid)) continue;
+                        // Try the repaired diagram, then the canonical
+                        // rebuild, then progressively simpler fallbacks, then
+                        // the prose rebuild — before ever showing an error.
+                        const candidates = [...new Set([code, toCanonicalFlowchart(raw), ...mermaidFallbacks(code), rebuilt && rebuilt.mermaid])];
+                        let svg = null;
+                        let reason = 'unknown';
+                        for (const candidate of candidates) {
+                            if (!candidate) continue;
+                            try {
+                                const id = 'mermaid-svg-' + i + '-' + Date.now();
+                                ({ svg } = await window.mermaid.render(id, candidate));
+                                break;
+                            } catch (e) {
+                                reason = ((e && e.message) || 'unknown').replace(/\s+/g, ' ');
+                            }
                         }
+                        if (svg) {
+                            el.innerHTML = svg;
+                        } else {
+                            console.warn('all variants failed. source was:', raw);
+                            el.innerHTML = `<div class="mermaid-error">Diagram unavailable (${reason})</div>`;
+                        }
+                        el.setAttribute('data-rendered', '1');
                     }
                 }, 400);
             }

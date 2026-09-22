@@ -268,3 +268,53 @@ export function toCanonicalFlowchart(raw) {
     for (const [a, b] of edges) out.push(`    ${a} --> ${b}`);
     return out.join('\n');
 }
+
+// ── Render-pipeline helpers ─────────────────────────────────────────────
+//
+// The model answers in markdown; the renderer needs DOM placeholders. These
+// two string functions bridge that gap. Pure functions, no DOM — unit tested
+// in scripts/test-mermaid-render.js.
+
+function decodeEntities(code) {
+    return String(code)
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"');
+}
+
+export function encodeDiagram(code) {
+    return btoa(unescape(encodeURIComponent(String(code || ''))));
+}
+
+export function decodeDiagram(encoded) {
+    return decodeURIComponent(escape(atob(String(encoded || ''))));
+}
+
+// Convert marked's <pre><code class="language-mermaid"> blocks into
+// <div class="mermaid" data-code="base64"> placeholders that the debounced
+// renderer in AssistantView picks up. Case-insensitive so ```Mermaid /
+// ```MERMAID fences work too.
+export function mermaidBlocksToDivs(html) {
+    return String(html || '').replace(
+        /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/gi,
+        (_, code) => '<div class="mermaid" data-code="' + encodeDiagram(decodeEntities(code)) + '"></div>'
+    );
+}
+
+// If streaming was cut off mid-diagram the ```mermaid fence never closes;
+// marked then swallows the whole block as a paragraph and no diagram
+// renders. Auto-close a trailing UNCLOSED mermaid fence so a partial
+// diagram still renders (it re-renders as more chunks arrive). Leaves
+// already-closed fences and non-mermaid fences untouched.
+export function closeUnclosedMermaidFence(markdown) {
+    const content = String(markdown || '');
+    if (content.indexOf('```') === -1) return content;
+    const opens = content.match(/```/g).length;
+    if (opens % 2 === 0) return content; // all fences closed
+    const lastFence = content.lastIndexOf('```');
+    const after = content.slice(lastFence + 3);
+    if (/^\s*mermaid\b/i.test(after)) return content + '\n```';
+    return content;
+}
