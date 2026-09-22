@@ -1,5 +1,6 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { unifiedPageStyles } from './sharedPageStyles.js';
+import { PROFILE_LABELS } from '../profiles.js';
 
 export class HistoryView extends LitElement {
     static styles = [
@@ -367,14 +368,7 @@ export class HistoryView extends LitElement {
     }
 
     getProfileNames() {
-        return {
-            interview: 'Job Interview',
-            sales: 'Sales Call',
-            meeting: 'Business Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
+        return PROFILE_LABELS;
     }
 
     _getProfileLabel(session) {

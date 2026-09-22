@@ -1,5 +1,6 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { unifiedPageStyles } from './sharedPageStyles.js';
+import { PROFILES } from '../profiles.js';
 
 export class AICustomizeView extends LitElement {
     static styles = [
@@ -84,27 +85,8 @@ export class AICustomizeView extends LitElement {
         await metaMaxPro.storage.updatePreference('jobDescription', val);
     }
 
-    _getProfileName(profile) {
-        const names = {
-            interview: 'Job Interview',
-            sales: 'Sales Call',
-            meeting: 'Business Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
-        return names[profile] || profile;
-    }
-
     render() {
-        const profiles = [
-            { value: 'interview', label: 'Job Interview' },
-            { value: 'sales', label: 'Sales Call' },
-            { value: 'meeting', label: 'Business Meeting' },
-            { value: 'presentation', label: 'Presentation' },
-            { value: 'negotiation', label: 'Negotiation' },
-            { value: 'exam', label: 'Exam Assistant' },
-        ];
+        const profiles = PROFILES;
 
         return html`
             <div class="unified-page">

@@ -1,4 +1,5 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { PROFILES } from '../profiles.js';
 
 export class MainView extends LitElement {
     static styles = css`
@@ -1161,18 +1162,7 @@ export class MainView extends LitElement {
     }
 
     _renderHomeStartTab() {
-        const profiles = [
-            { value: 'interview', label: 'Job Interview' },
-            { value: 'behavioral', label: 'Behavioral Interview' },
-            { value: 'coding', label: 'Coding Interview' },
-            { value: 'system_design', label: 'System Design' },
-            { value: 'case', label: 'Case Interview' },
-            { value: 'sales', label: 'Sales Call' },
-            { value: 'meeting', label: 'Business Meeting' },
-            { value: 'presentation', label: 'Presentation' },
-            { value: 'negotiation', label: 'Negotiation' },
-            { value: 'assistant', label: 'Assistant' },
-        ];
+        const profiles = PROFILES;
 
         return html`
             <div class="form-group">

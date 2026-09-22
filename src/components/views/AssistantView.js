@@ -1,4 +1,7 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { PROFILE_LABELS } from '../profiles.js';
+import { sanitizeMermaid, mermaidFallbacks, ensureDiagramHeader, looksLikeGraph, toCanonicalFlowchart } from '../mermaid.js';
+import { generateDiagram, diagramProse } from '../diagramIntelligence.js';
 
 export class AssistantView extends LitElement {
     static styles = css`
@@ -240,7 +243,9 @@ export class AssistantView extends LitElement {
             height: 26px;
             font-size: 14px;
             cursor: pointer;
-            transition: background var(--transition), color var(--transition);
+            transition:
+                background var(--transition),
+                color var(--transition);
         }
         .stepper-btn:hover {
             background: var(--bg-hover);
@@ -503,6 +508,37 @@ export class AssistantView extends LitElement {
             margin: 0.8em 0;
             text-align: center;
             overflow-x: auto;
+        }
+
+        .mermaid-error {
+            color: #9ca3af;
+            font-size: 11px;
+            padding: 8px 10px;
+            border: 1px dashed rgba(156, 163, 175, 0.35);
+            border-radius: 6px;
+        }
+
+        /* Text rendering of the same graph, shown when mermaid cannot draw it
+           or never loaded. A readable diagram beats an apology. */
+        .mermaid-ascii {
+            margin: 0;
+            text-align: left;
+            font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+            font-size: 11px;
+            line-height: 1.55;
+            color: #e5e7eb;
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        /* Provenance. A diagram rebuilt from the explanation must never be
+           mistaken for one the interviewer put on the board. */
+        .diagram-note {
+            margin-top: 6px;
+            font-size: 10px;
+            letter-spacing: 0.02em;
+            color: #9ca3af;
+            text-align: left;
         }
 
         .response-container .mermaid svg {
@@ -929,14 +965,7 @@ export class AssistantView extends LitElement {
     }
 
     getProfileNames() {
-        return {
-            interview: 'Job Interview',
-            sales: 'Sales Call',
-            meeting: 'Business Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
+        return PROFILE_LABELS;
     }
 
     getCurrentResponse() {
@@ -946,11 +975,76 @@ export class AssistantView extends LitElement {
             : `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
     }
 
+    // ── System Design diagrams ──────────────────────────────────────────
+    //
+    // The architecture diagram is the payload of a System Design answer, and it
+    // used to be all-or-nothing: if the model's Mermaid did not parse, or it
+    // narrated the architecture and forgot the fence, the candidate got a line
+    // of grey apology text where the picture should be. The answer PROSE is
+    // still a complete description of the graph, so it travels with the diagram
+    // (data-prose) and src/components/diagramIntelligence.js rebuilds the
+    // diagram from it — as a last-resort render variant, and as the whole
+    // diagram when no fence arrived at all.
+
+    // Phase 4 markers from the system_design prompt. The prompt deliberately
+    // withholds the diagram until the design has been communicated, so a
+    // reconstruction only ever appears for an answer that MEANT to draw one:
+    // never over the scoping questions of phase 1 or the playback of phase 2.
+    // These three headings are emitted ONLY by phase 4. "THE DIAGRAM" and the
+    // write/read path lines were in this list and had to come out: phase 3 says
+    // "Still no diagram" and yet narrates "Write path:" / "Read path:", so those
+    // markers would have drawn the architecture a full phase early and undone
+    // the staging the prompt is built around.
+    static DIAGRAM_INTENT = /\b(WHAT EACH BLOCK DOES|HOW DATA FLOWS|SCALING AND FAILURE)\b/i;
+
+    _b64(text) {
+        try {
+            return btoa(unescape(encodeURIComponent(String(text || ''))));
+        } catch {
+            return '';
+        }
+    }
+
+    // Rebuild the architecture from the prose carried on a diagram element.
+    // Returns null when the element has no prose or the prose has no structure
+    // in it — diagramIntelligence never guesses at edges, so "nothing to draw"
+    // is a normal answer here.
+    _rebuildFromProse(el) {
+        try {
+            const encoded = el && el.getAttribute('data-prose');
+            if (!encoded) return null;
+            const prose = decodeURIComponent(escape(atob(encoded)));
+            const rebuilt = generateDiagram({ text: prose, prefer: 'architecture' });
+            return rebuilt.mermaid || rebuilt.ascii ? rebuilt : null;
+        } catch {
+            return null;
+        }
+    }
+
+    _diagramNoteHtml() {
+        return '<div class="diagram-note">Rebuilt from the explanation above — not the interviewer\'s diagram.</div>';
+    }
+
+    // The graph as text, for when mermaid cannot draw it or never loaded.
+    _asciiDiagramHtml(el) {
+        const rebuilt = this._rebuildFromProse(el);
+        if (!rebuilt || !rebuilt.ascii) return '';
+        const escaped = rebuilt.ascii.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<pre class="mermaid-ascii">${escaped}</pre>${this._diagramNoteHtml()}`;
+    }
+
     renderMarkdown(content) {
-        // Two-column CODE / SYSTEM DESIGN component: the LLM emits a strict
-        // marker format for technical questions; render it as a side-by-side
-        // layout (spoken explanation left, copyable code right).
-        if (content && content.includes('CODE_COMPONENT_START')) {
+        // System Design answers render single-column. Their payload is an
+        // architecture diagram plus narration, and the two-column split pushed
+        // the diagram into a narrow half-width column with a stray code panel
+        // beside it. Coding Interview keeps the side-by-side layout, where
+        // explanation-left / code-right is the point.
+        const singleColumn = this.selectedProfile === 'system_design';
+
+        // Two-column CODE component: the LLM emits a strict marker format for
+        // technical questions; render it as a side-by-side layout (spoken
+        // explanation left, copyable code right).
+        if (!singleColumn && content && content.includes('CODE_COMPONENT_START')) {
             const html = this._renderCodeComponent(content);
             if (html) return html;
         }
@@ -964,7 +1058,13 @@ export class AssistantView extends LitElement {
                 let rendered = window.marked.parse(content);
                 rendered = this.wrapWordsInSpans(rendered);
                 // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
-                rendered = rendered.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
+                // Tolerant match: models write ```Mermaid, ```mermaid , or marked may
+                // add extra classes. A missed match left the diagram as a code block.
+                // System Design answers carry their narration next to the
+                // diagram source, so a spec that will not parse can still be
+                // rebuilt from the explanation instead of vanishing.
+                const proseAttr = singleColumn ? ` data-prose="${this._b64(diagramProse(content))}"` : '';
+                rendered = rendered.replace(/<pre><code class="[^"]*\blanguage-mermaid\b[^"]*"[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, code) => {
                     const decoded = code
                         .replace(/&lt;/g, '<')
                         .replace(/&gt;/g, '>')
@@ -972,13 +1072,22 @@ export class AssistantView extends LitElement {
                         .replace(/&#39;/g, "'")
                         .replace(/&quot;/g, '"');
                     const encoded = btoa(unescape(encodeURIComponent(decoded)));
-                    return `<div class="mermaid" data-code="${encoded}"></div>`;
+                    return `<div class="mermaid" data-code="${encoded}"${proseAttr}></div>`;
                 });
+                // No fence at all, but the answer reached the diagram phase:
+                // draw the architecture it just described in words.
+                if (singleColumn && !/class="mermaid"/.test(rendered) && AssistantView.DIAGRAM_INTENT.test(content)) {
+                    const prose = diagramProse(content);
+                    const rebuilt = generateDiagram({ text: prose, prefer: 'architecture' });
+                    if (rebuilt.mermaid) {
+                        rendered += `<div class="mermaid" data-code="${this._b64(rebuilt.mermaid)}" data-prose="${this._b64(prose)}" data-reconstructed="1"></div>`;
+                    }
+                }
                 // Deterministic two-column layout: ANY answer with a code
                 // block + meaningful prose renders side-by-side (explanation
                 // left, code right) — not dependent on the model emitting
-                // CODE_COMPONENT markers.
-                return this._maybeTwoColumn(rendered);
+                // CODE_COMPONENT markers. Skipped for System Design.
+                return singleColumn ? rendered : this._maybeTwoColumn(rendered);
             } catch (error) {
                 console.warn('Error parsing markdown:', error);
                 return content;
@@ -1564,6 +1673,19 @@ export class AssistantView extends LitElement {
             }
             // Debounce mermaid rendering — updateResponseContent fires on every streaming chunk,
             // so we wait until streaming settles before rendering diagrams
+            // If mermaid failed to load at all, say so instead of leaving a
+            // silent empty box where the architecture should be.
+            if (typeof window !== 'undefined' && !window.mermaid && container.querySelector('.mermaid')) {
+                container.querySelectorAll('.mermaid').forEach(el => {
+                    if (!el.querySelector('svg')) {
+                        // No engine, but the graph is still known: draw it as
+                        // text rather than reporting a loader failure.
+                        el.innerHTML =
+                            this._asciiDiagramHtml(el) ||
+                            `<div class="mermaid-error">Diagram engine failed to load — the architecture is described in the text.</div>`;
+                    }
+                });
+            }
             if (typeof window !== 'undefined' && window.mermaid && container.querySelector('.mermaid')) {
                 if (this._mermaidTimer) clearTimeout(this._mermaidTimer);
                 this._mermaidTimer = setTimeout(async () => {
@@ -1574,38 +1696,68 @@ export class AssistantView extends LitElement {
                         const encoded = el.getAttribute('data-code');
                         if (!encoded) continue;
                         const raw = decodeURIComponent(escape(atob(encoded)));
-                        const code = raw
-                            .replace(/```\s*"?\s*$/, '')
-                            .trim()
-                            .split('\n')
-                            .map(line => {
-                                // Strip &amp; artifacts from subgraph names (subgraph Data & Async → subgraph Data and Async)
-                                line = line.replace(/^(\s*subgraph\s+)(.*)$/g, (_, prefix, name) => {
-                                    const clean = name.replace(/&/g, 'and').replace(/[^a-zA-Z0-9 _-]/g, '');
-                                    return prefix + clean.trim();
-                                });
-                                // Convert dotted arrows -.-> or -. text .-> to solid arrows -->
-                                line = line.replace(/\s*-\..*?\.?->\s*/g, ' --> ');
-                                // Convert thick arrows ==> to solid arrows -->
-                                line = line.replace(/\s*==+>\s*/g, ' --> ');
-                                // Quote unquoted bracket labels containing special chars: / ( ) : & ;
-                                line = line.replace(/\[([^\]"]*[\/\(\):&;][^\]"]*)\]/g, (_, l) => `["${l}"]`);
-                                // Fix already-quoted labels with nested quotes
-                                line = line.replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`);
-                                // Fix parenthesized labels (round shapes)
-                                line = line.replace(/\("(.+)"\)/g, (_, l) => `("${l.replace(/"/g, '')}")`);
-                                // Quote participant lines with special chars
-                                line = line.replace(/^(\s*participant\s+)([^"\n]*[\/\(\)\.][^"\n]*)$/g, (_, p, name) => `${p}"${name.trim()}"`);
-                                return line;
-                            })
-                            .join('\n');
+                        const code = ensureDiagramHeader(sanitizeMermaid(raw));
+                        // The architecture as described in the answer's prose —
+                        // the last thing to try, and the only thing available
+                        // when the model narrated the design without a fence.
+                        const rebuilt = this._rebuildFromProse(el);
+                        // Mid-stream the fence is often open with nothing in it
+                        // yet. Rendering that throws "No diagram type detected"
+                        // and would stamp an error over a diagram that is still
+                        // arriving, so wait for the next update instead.
+                        if ((!code || !looksLikeGraph(code)) && !(rebuilt && rebuilt.mermaid)) continue;
+                        // Try the full diagram, then progressively simpler ones.
+                        // Models emit near-valid Mermaid and ONE bad line used to
+                        // mean no diagram at all — a plainer diagram communicates
+                        // far more than an error message.
+                        let lastError = null;
+                        let drawn = false;
+                        // Order matters, most faithful first: the model's own
+                        // syntax (keeps its shapes and grouping), then the
+                        // canonical rebuild of that same source, then the crude
+                        // simplifications, and only then the architecture
+                        // rebuilt from the prose — which owes nothing to the
+                        // model's syntax and so cannot fail to parse, but is
+                        // our reading of the answer rather than its own.
+                        const variants = [
+                            ...new Set([code, toCanonicalFlowchart(raw), ...mermaidFallbacks(code), rebuilt && rebuilt.mermaid].filter(Boolean)),
+                        ];
+                        for (let v = 0; v < variants.length && !drawn; v++) {
+                            try {
+                                const id = 'mermaid-svg-' + i + '-' + v + '-' + Date.now();
+                                const { svg } = await window.mermaid.render(id, variants[v]);
+                                el.innerHTML = svg;
+                                // Say so when the picture is ours and not the
+                                // model's — an unlabeled reconstruction is the
+                                // one outcome worse than no diagram.
+                                const isRebuild = el.hasAttribute('data-reconstructed') || (rebuilt && variants[v] === rebuilt.mermaid);
+                                if (isRebuild) el.insertAdjacentHTML('beforeend', this._diagramNoteHtml());
+                                drawn = true;
+                                if (v > 0) console.warn(`Mermaid: rendered simplified variant ${v} after a parse failure`);
+                            } catch (err) {
+                                lastError = err;
+                            }
+                        }
                         try {
-                            const id = 'mermaid-svg-' + i + '-' + Date.now();
-                            const { svg } = await window.mermaid.render(id, code);
-                            el.innerHTML = svg;
+                            if (!drawn) throw lastError || new Error('diagram did not parse');
                         } catch (e) {
-                            console.warn('Mermaid render error:', e);
-                            el.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:8px;">Diagram error: ${e.message}</div><pre style="color:#999;font-size:10px;overflow-x:auto;">${code}</pre>`;
+                            // Log the source for debugging but never render it:
+                            // dumping raw Mermaid into the answer put a code
+                            // block where the architecture diagram should be.
+                            console.warn('Mermaid render error:', e, '\nsource:\n' + code);
+                            // Keep the WHOLE mermaid message (flattened), not
+                            // just its first line. The first line is only
+                            // "Parse error on line N:" — the part that names
+                            // the offending token comes after it, and dropping
+                            // it made these failures undiagnosable.
+                            const reason = String((e && e.message) || 'unknown')
+                                .replace(/\s+/g, ' ')
+                                .trim()
+                                .slice(0, 300);
+                            console.error('[mermaid] all variants failed. source was:\n' + raw + '\n\nlast error: ' + ((e && e.message) || e));
+                            el.innerHTML =
+                                this._asciiDiagramHtml(el) ||
+                                `<div class="mermaid-error">Diagram unavailable (${reason}) — the architecture is described in the text.</div>`;
                         }
                     }
                 }, 400);

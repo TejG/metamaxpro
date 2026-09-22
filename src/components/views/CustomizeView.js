@@ -243,19 +243,6 @@ export class CustomizeView extends LitElement {
         }
     }
 
-    getProfiles() {
-        return [
-            { value: 'interview', name: 'Job Interview' },
-            { value: 'coding', name: 'Coding Interview' },
-            { value: 'system_design', name: 'System Design' },
-            { value: 'sales', name: 'Sales Call' },
-            { value: 'meeting', name: 'Business Meeting' },
-            { value: 'presentation', name: 'Presentation' },
-            { value: 'negotiation', name: 'Negotiation' },
-            { value: 'exam', name: 'Exam Assistant' },
-        ];
-    }
-
     getLanguages() {
         return [
             { value: 'en-US', name: 'English (US)' },

@@ -1,4 +1,5 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { getProfileLabel } from '../profiles.js';
 import { MainView } from '../views/MainView.js';
 import { CustomizeView } from '../views/CustomizeView.js';
 import { HelpView } from '../views/HelpView.js';
@@ -1269,25 +1270,11 @@ export class MetaMaxProApp extends LitElement {
     renderLiveBar() {
         if (!this._isLiveMode()) return '';
 
-        const profileLabels = {
-            interview: 'Interview',
-            behavioral: 'Behavioral Interview',
-            coding: 'Coding Interview',
-            system_design: 'System Design',
-            case: 'Case Interview',
-            sales: 'Sales Call',
-            meeting: 'Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam',
-            assistant: 'Assistant',
-        };
-
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
                     <span class="live-bar-text brand">MetaQuest</span>
-                    <span class="live-bar-mode">${profileLabels[this.selectedProfile] || 'Session'}</span>
+                    <span class="live-bar-mode">${getProfileLabel(this.selectedProfile)}</span>
                     ${
                         this.statusText && !this._isErrorStatus(this.statusText)
                             ? html`<span class="status-pill ${/listening|live/i.test(this.statusText) ? 'ok' : 'busy'}">

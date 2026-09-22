@@ -82,23 +82,60 @@ check('keeps the honesty rule about not executing code', /Never claim the code w
 check('keeps the deterministic language lock', /LANGUAGE LOCK/.test(coding) && /never switch/i.test(coding));
 check('still handles screenshot problems', /SCREENSHOT/i.test(coding));
 
-console.log('— system design: clarify before drawing —');
-check('has a phase gate', /PHASE 1/.test(design) && /PHASE 2/.test(design));
-check('phase 1 forbids the diagram explicitly', /NO Mermaid diagram/.test(design));
-check('no longer barrels into the design in the same turn', !/While you think about those/.test(design));
-check('tells the model to stop and wait after clarifying', /stop after\s*\n?\s*the assumptions offer and wait/i.test(design));
+console.log('— system design: four phases, diagram last —');
+for (const n of [1, 2, 3, 4]) check(`has phase ${n}`, new RegExp(`PHASE ${n}`).test(design));
 check(
-    'asks about scope, scale, latency and consistency',
-    /Functional scope/.test(design) && /Scale & traffic/.test(design) && /Latency & SLA/.test(design) && /Consistency & geography/.test(design)
+    'phases run scope -> confirm -> design -> diagram',
+    /PHASE 1 - SCOPE/.test(design) && /PHASE 2 - CONFIRM/.test(design) && /PHASE 3 - HIGH-LEVEL/.test(design) && /PHASE 4 - ARCHITECTURE/.test(design)
 );
-check('keeps the scale math section', /Back-of-envelope/.test(design));
-check('keeps the Mermaid diagram and its strict syntax rules', design.includes('```mermaid') && /STRICT Mermaid Syntax Rules/.test(design));
-check('keeps write-path / read-path narration', /Write path/.test(design) && /Read path/.test(design));
-check('keeps the deep dives and the instant pivot', /Hot partition/.test(design) && /instant pivot/i.test(design));
+check('states the diagram comes last, never first', /diagram is the LAST thing you produce, never the first/.test(design));
+check('delivers one phase per turn', /Deliver ONE phase per turn/.test(design));
+check('no longer barrels into the design in the same turn', !/While you think about those/.test(design));
+
+check('phase 1 forbids components and the diagram', /No components, no architecture, no diagram/.test(design));
+check('phase 1 must not answer its own questions', /Do not answer your own questions/.test(design));
+check(
+    'phase 1 asks scope, scale, latency, consistency',
+    /Functional scope/.test(design) &&
+        /Scale and traffic/.test(design) &&
+        /Latency and availability/.test(design) &&
+        /Consistency and geography/.test(design)
+);
+
+check('phase 2 confirms the discovery decisions', /CONFIRMED REQUIREMENTS/.test(design) && /DECISIONS MADE/.test(design));
+check('phase 2 names what is out of scope', /out of scope/i.test(design));
+check('phase 2 shows the scale arithmetic', /BACK OF THE ENVELOPE/.test(design) && /86400/.test(design));
+check('phase 2 still has no diagram', /Still no architecture and no diagram/.test(design));
+
+check('phase 3 covers high-level AND low-level', /HIGH-LEVEL DESIGN/.test(design) && /LOW-LEVEL DESIGN/.test(design));
+check('phase 3 covers API surface and data model', /API surface/.test(design) && /Data model/.test(design) && /partition key/.test(design));
+check('phase 3 narrates write and read paths', /Write path/.test(design) && /Read path/.test(design));
+check('phase 3 still withholds the diagram', /Still no diagram/.test(design));
+
+check('phase 4 has the diagram', design.includes('```mermaid'));
+check('phase 4 explains what each block does', /WHAT EACH BLOCK DOES/.test(design) && /Every node in the diagram must appear here/.test(design));
+check('phase 4 explains how data flows', /HOW DATA FLOWS/.test(design) && /following the arrows/.test(design));
+check('phase 4 covers scaling and failure', /SCALING AND FAILURE/.test(design) && /Hot key or celebrity/.test(design));
+check('keeps the instant-pivot pattern', /CHALLENGES A CHOICE/.test(design));
+
+console.log('— mermaid rules match what the renderer can parse —');
+check('rules are stated as hard requirements', /hard requirements, not style preferences/.test(design));
+check('forbids labelled arrows', /never a labelled arrow/.test(design));
+check('forbids reserved words as node ids', /Never use end,/.test(design));
+check(
+    'forbids style directives, emoji, br and curly quotes',
+    /No style, classDef or linkStyle/.test(design) && /No emoji, no <br>, no curly quotes/.test(design)
+);
+check('caps the node count', /8-14 nodes/.test(design));
+
+console.log('— no emoji anywhere in the prompts —');
+const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/u;
+for (const [k, body] of Object.entries(prompts.profilePrompts)) check(`${k} has no emoji`, !EMOJI.test(body));
+for (const [k, body] of Object.entries(prompts.responseModes)) check(`response mode ${k} has no emoji`, !EMOJI.test(body));
 
 console.log('— hint mode still withholds the answer —');
 check('coding hint mode withholds the code', /HINT mode[\s\S]{0,200}withhold the code/.test(coding));
-check('design hint mode stops after the diagram', /HINT mode[\s\S]{0,200}let the candidate drive/.test(design));
+check('design hint mode hands control back', /HINT mode[\s\S]{0,260}let the candidate\s*\n?\s*drive/.test(design));
 
 console.log('— generation budget (a full code answer must not truncate) —');
 (async () => {
@@ -129,14 +166,17 @@ console.log('— generation budget (a full code answer must not truncate) —');
     check('interview temperature unchanged at 0.2', b && b.temperature === 0.2, String(b && b.temperature));
 
     console.log('— the modes are selectable in the UI —');
-    const read = f => fs.readFileSync(path.join(ROOT, 'src', f), 'utf8');
-    const main = read('components/views/MainView.js');
-    const customize = read('components/views/CustomizeView.js');
-    const app = read('components/app/MetaMaxProApp.js');
+    // The UI reads its mode list from the shared registry, so being in the
+    // registry is what makes a mode appear everywhere (start dropdown, Profile
+    // tab, live bar, answer window, history). scripts/test-profile-registry.js
+    // asserts each site actually imports it.
+    const { PROFILES, getProfileLabel } = await import('file://' + path.join(ROOT, 'src/components/profiles.js'));
     for (const v of ['coding', 'system_design']) {
-        check(`MainView dropdown offers ${v}`, new RegExp(`value: '${v}'`).test(main));
-        check(`CustomizeView offers ${v}`, new RegExp(`value: '${v}'`).test(customize));
-        check(`live bar has a label for ${v}`, new RegExp(`${v}:`).test(app));
+        check(
+            `${v} is in the shared profile registry`,
+            PROFILES.some(p => p.value === v)
+        );
+        check(`${v} has a human-readable label`, getProfileLabel(v) !== v, getProfileLabel(v));
     }
     // The router's technical-profile check must use the same keys the UI sends.
     const routerSrc = fs.readFileSync(path.join(ROOT, 'src', 'utils', 'llm', 'router.js'), 'utf8');
@@ -144,6 +184,13 @@ console.log('— generation budget (a full code answer must not truncate) —');
         "router keys match the dropdown's values",
         /currentProfile === 'coding'/.test(routerSrc) && /currentProfile === 'system_design'/.test(routerSrc)
     );
+
+    console.log('— system design renders single-column, coding stays side-by-side —');
+    const av = fs.readFileSync(path.join(ROOT, 'src/components/views/AssistantView.js'), 'utf8');
+    check('renderMarkdown branches on the system_design profile', /const singleColumn = this\.selectedProfile === 'system_design'/.test(av));
+    check('system design skips the two-column split', /singleColumn \? rendered : this\._maybeTwoColumn\(rendered\)/.test(av));
+    check('system design skips the marker-based component too', /!singleColumn && content && content\.includes\('CODE_COMPONENT_START'\)/.test(av));
+    check('coding still reaches _maybeTwoColumn', /_maybeTwoColumn\(html\)/.test(av) && /includes\('<pre'\)/.test(av));
 
     // These two modes carry the largest profile blocks in the app and the system
     // prompt is resent on every question, so guard against unchecked creep.
