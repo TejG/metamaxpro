@@ -81,7 +81,12 @@ export function ensureDiagramHeader(code) {
     if (DIAGRAM_TYPE.test(first)) {
         // `flowchart` / `graph` with no direction renders inconsistently.
         if (/^(flowchart|graph)$/i.test(first)) lines[0] = 'flowchart LR';
-        return lines.join('\n');
+        // The model sometimes emits the header twice (the "first line is
+        // exactly: flowchart LR" rule plus copying the example). A second bare
+        // header line is a hard parse error ("Parse error on line 2"), so drop
+        // any repeat of it — there is no legitimate bare header mid-diagram.
+        const rest = lines.slice(1).filter(l => !/^(flowchart|graph)(\s+[A-Za-z]+)?\s*$/i.test(l.trim()));
+        return [lines[0], ...rest].join('\n');
     }
     if (!looksLikeGraph(src)) return src; // prose in a fence; nothing to draw
     return ['flowchart LR', ...lines.map(l => '    ' + l.trim())].join('\n');

@@ -180,6 +180,19 @@ async function main() {
         const code = pipeline('## Architecture\n```mermaid\nflowchart LR\n    Client["Web"] --> LB["ALB"]\n    LB --> Svc["API');
         assert(code.startsWith('flowchart LR'), 'truncated diagram lost: ' + code.slice(0, 40));
     });
+    check('a doubled header is collapsed so every candidate has exactly one', () => {
+        // Regression: the model sometimes emits "flowchart LR" twice; the real
+        // parser rejects that with "Parse error on line 2". ensureDiagramHeader
+        // must collapse the repeat on every candidate the renderer tries.
+        const raw = 'flowchart LR\nflowchart LR\n    Client["Web"] --> LB["ALB"]\n    LB --> Svc["API"]';
+        const code = M.ensureDiagramHeader(M.sanitizeMermaid(raw));
+        const candidates = [code, M.toCanonicalFlowchart(raw), ...M.mermaidFallbacks(code)].filter(Boolean);
+        assert(candidates.length > 0, 'no candidates produced');
+        for (const c of candidates) {
+            const headers = c.split('\n').filter(l => /^(flowchart|graph)\b/i.test(l.trim()));
+            assert(headers.length === 1, 'candidate kept a doubled header:\n' + c);
+        }
+    });
 
     console.log('\n6. prompt + router wiring');
     check('system_design prompt demands a complete closed diagram, spoken', () => {
