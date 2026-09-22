@@ -1055,34 +1055,16 @@ export class AssistantView extends LitElement {
                     gfm: true,
                     sanitize: false,
                 });
-                let rendered = window.marked.parse(content);
+                const MF = window.MermaidFormat || null;
+                // A stream cut off mid-diagram leaves the ```mermaid fence
+                // unclosed; marked would swallow it as a paragraph and no
+                // diagram would render. Auto-close it so a partial diagram
+                // still renders (it re-renders as more chunks arrive).
+                const normalized = MF ? MF.closeUnclosedMermaidFence(content) : content;
+                let rendered = window.marked.parse(normalized);
                 rendered = this.wrapWordsInSpans(rendered);
                 // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
-                // Tolerant match: models write ```Mermaid, ```mermaid , or marked may
-                // add extra classes. A missed match left the diagram as a code block.
-                // System Design answers carry their narration next to the
-                // diagram source, so a spec that will not parse can still be
-                // rebuilt from the explanation instead of vanishing.
-                const proseAttr = singleColumn ? ` data-prose="${this._b64(diagramProse(content))}"` : '';
-                rendered = rendered.replace(/<pre><code class="[^"]*\blanguage-mermaid\b[^"]*"[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, code) => {
-                    const decoded = code
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&#39;/g, "'")
-                        .replace(/&quot;/g, '"');
-                    const encoded = btoa(unescape(encodeURIComponent(decoded)));
-                    return `<div class="mermaid" data-code="${encoded}"${proseAttr}></div>`;
-                });
-                // No fence at all, but the answer reached the diagram phase:
-                // draw the architecture it just described in words.
-                if (singleColumn && !/class="mermaid"/.test(rendered) && AssistantView.DIAGRAM_INTENT.test(content)) {
-                    const prose = diagramProse(content);
-                    const rebuilt = generateDiagram({ text: prose, prefer: 'architecture' });
-                    if (rebuilt.mermaid) {
-                        rendered += `<div class="mermaid" data-code="${this._b64(rebuilt.mermaid)}" data-prose="${this._b64(prose)}" data-reconstructed="1"></div>`;
-                    }
-                }
+                rendered = MF ? MF.mermaidBlocksToDivs(rendered) : rendered;
                 // Deterministic two-column layout: ANY answer with a code
                 // block + meaningful prose renders side-by-side (explanation
                 // left, code right) — not dependent on the model emitting
@@ -1146,7 +1128,13 @@ export class AssistantView extends LitElement {
 
             const md = t => (window.marked ? window.marked.parse(t) : t);
             const leftHtml = md(leftMatch[1].trim());
-            const rightHtml = md(rightMatch[1].trim());
+            let rightHtml = md(rightMatch[1].trim());
+            // Diagrams on the right side must go through the same mermaid
+            // placeholder conversion as the normal path, otherwise the
+            // debounced renderer never picks them up and the user sees raw
+            // mermaid source instead of a diagram.
+            const MF = typeof window !== 'undefined' ? window.MermaidFormat : null;
+            if (MF) rightHtml = MF.mermaidBlocksToDivs(rightHtml);
 
             // Anything before/after the component (rare) renders as normal markdown.
             const before = content.slice(0, m.index).trim();
@@ -1689,75 +1677,27 @@ export class AssistantView extends LitElement {
             if (typeof window !== 'undefined' && window.mermaid && container.querySelector('.mermaid')) {
                 if (this._mermaidTimer) clearTimeout(this._mermaidTimer);
                 this._mermaidTimer = setTimeout(async () => {
+                    const MF = window.MermaidFormat || null;
                     const diagrams = container.querySelectorAll('.mermaid');
                     if (!diagrams.length) return;
                     for (let i = 0; i < diagrams.length; i++) {
                         const el = diagrams[i];
+                        // Skip diagrams already rendered by a previous pass —
+                        // without this every streaming chunk re-renders every
+                        // diagram on screen.
+                        if (el.getAttribute('data-rendered') === '1') continue;
                         const encoded = el.getAttribute('data-code');
                         if (!encoded) continue;
-                        const raw = decodeURIComponent(escape(atob(encoded)));
-                        const code = ensureDiagramHeader(sanitizeMermaid(raw));
-                        // The architecture as described in the answer's prose —
-                        // the last thing to try, and the only thing available
-                        // when the model narrated the design without a fence.
-                        const rebuilt = this._rebuildFromProse(el);
-                        // Mid-stream the fence is often open with nothing in it
-                        // yet. Rendering that throws "No diagram type detected"
-                        // and would stamp an error over a diagram that is still
-                        // arriving, so wait for the next update instead.
-                        if ((!code || !looksLikeGraph(code)) && !(rebuilt && rebuilt.mermaid)) continue;
-                        // Try the full diagram, then progressively simpler ones.
-                        // Models emit near-valid Mermaid and ONE bad line used to
-                        // mean no diagram at all — a plainer diagram communicates
-                        // far more than an error message.
-                        let lastError = null;
-                        let drawn = false;
-                        // Order matters, most faithful first: the model's own
-                        // syntax (keeps its shapes and grouping), then the
-                        // canonical rebuild of that same source, then the crude
-                        // simplifications, and only then the architecture
-                        // rebuilt from the prose — which owes nothing to the
-                        // model's syntax and so cannot fail to parse, but is
-                        // our reading of the answer rather than its own.
-                        const variants = [
-                            ...new Set([code, toCanonicalFlowchart(raw), ...mermaidFallbacks(code), rebuilt && rebuilt.mermaid].filter(Boolean)),
-                        ];
-                        for (let v = 0; v < variants.length && !drawn; v++) {
-                            try {
-                                const id = 'mermaid-svg-' + i + '-' + v + '-' + Date.now();
-                                const { svg } = await window.mermaid.render(id, variants[v]);
-                                el.innerHTML = svg;
-                                // Say so when the picture is ours and not the
-                                // model's — an unlabeled reconstruction is the
-                                // one outcome worse than no diagram.
-                                const isRebuild = el.hasAttribute('data-reconstructed') || (rebuilt && variants[v] === rebuilt.mermaid);
-                                if (isRebuild) el.insertAdjacentHTML('beforeend', this._diagramNoteHtml());
-                                drawn = true;
-                                if (v > 0) console.warn(`Mermaid: rendered simplified variant ${v} after a parse failure`);
-                            } catch (err) {
-                                lastError = err;
-                            }
-                        }
+                        const code = MF ? MF.sanitizeMermaidCode(encoded) : decodeURIComponent(escape(atob(encoded)));
                         try {
-                            if (!drawn) throw lastError || new Error('diagram did not parse');
+                            const id = 'mermaid-svg-' + i + '-' + Date.now();
+                            const { svg } = await window.mermaid.render(id, code);
+                            el.innerHTML = svg;
+                            el.setAttribute('data-rendered', '1');
                         } catch (e) {
-                            // Log the source for debugging but never render it:
-                            // dumping raw Mermaid into the answer put a code
-                            // block where the architecture diagram should be.
-                            console.warn('Mermaid render error:', e, '\nsource:\n' + code);
-                            // Keep the WHOLE mermaid message (flattened), not
-                            // just its first line. The first line is only
-                            // "Parse error on line N:" — the part that names
-                            // the offending token comes after it, and dropping
-                            // it made these failures undiagnosable.
-                            const reason = String((e && e.message) || 'unknown')
-                                .replace(/\s+/g, ' ')
-                                .trim()
-                                .slice(0, 300);
-                            console.error('[mermaid] all variants failed. source was:\n' + raw + '\n\nlast error: ' + ((e && e.message) || e));
-                            el.innerHTML =
-                                this._asciiDiagramHtml(el) ||
-                                `<div class="mermaid-error">Diagram unavailable (${reason}) — the architecture is described in the text.</div>`;
+                            console.warn('Mermaid render error:', e);
+                            el.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:8px;">Diagram error: ${e.message}</div><pre style="color:#999;font-size:10px;overflow-x:auto;">${code}</pre>`;
+                            el.setAttribute('data-rendered', '1');
                         }
                     }
                 }, 400);

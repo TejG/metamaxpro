@@ -11,6 +11,7 @@ const {
 } = require('./config');
 const { saveConversationTurn, recentHistoryAsAnthropicMessages } = require('./persistence');
 const { getAnthropicApiKey, getGroqApiKey, getApiKey } = require('../../storage');
+const { recommendedGenerationSettings } = require('../prompts');
 const telemetry = require('./telemetry');
 const { getRelevantResumeSections } = require('./contextFilter');
 
@@ -135,8 +136,17 @@ async function routeAnswer(transcription) {
 
     // Temperature control: interview mode uses 0.2 to reduce hallucination risk,
     // reasoning mode uses 0.1 for correctness, standard conversational uses 0.4.
+    // System-design answers follow recommendedGenerationSettings (0.15): the
+    // diagram syntax rules are strict, so a cooler temperature keeps the
+    // mermaid output valid.
     const isInterviewMode = S.currentProfile === 'job_interview' || S.currentProfile === 'interview' || S.currentProfile === 'meeting';
-    const temperature = reasoning ? 0.1 : isInterviewMode ? 0.2 : 0.4;
+    const isSystemDesign = S.currentProfile === 'system_design';
+    const profileSettings = (S.currentProfile && recommendedGenerationSettings[S.currentProfile]) || null;
+    const temperature = reasoning
+        ? 0.1
+        : profileSettings && typeof profileSettings.temperature === 'number'
+          ? profileSettings.temperature
+          : isInterviewMode ? 0.2 : 0.4;
 
     // Cascade: first provider that returns text wins, and each provider gets a
     // latency budget so one stalled provider can't eat the whole answer.
@@ -152,8 +162,14 @@ async function routeAnswer(transcription) {
     // Silence before the first token is the thing actually worth aborting. Once
     // tokens are flowing the provider is working, so it gets the (much wider)
     // hard ceiling to finish.
-    const TTFT_BUDGET_MS = reasoning ? 20000 : 7000;
-    const HARD_BUDGET_MS = reasoning ? 60000 : 30000;
+    // System-design answers are long by design (clarifying questions, scale math,
+    // full mermaid diagram, walkthrough, data model, deep dives). Give them the
+    // reasoning lane's wider budget so the stream isn't aborted mid-diagram —
+    // a cut-off stream leaves the ```mermaid fence unclosed and no diagram
+    // renders at all.
+    const longAnswer = reasoning || isSystemDesign;
+    const TTFT_BUDGET_MS = longAnswer ? 20000 : 7000;
+    const HARD_BUDGET_MS = longAnswer ? 60000 : 30000;
 
     // Why each provider didn't answer, so a failure can say something true
     // instead of always pointing at the API keys.
