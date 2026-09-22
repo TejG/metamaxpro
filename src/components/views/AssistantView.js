@@ -961,19 +961,16 @@ export class AssistantView extends LitElement {
                     gfm: true,
                     sanitize: false,
                 });
-                let rendered = window.marked.parse(content);
+                const MF = window.MermaidFormat || null;
+                // A stream cut off mid-diagram leaves the ```mermaid fence
+                // unclosed; marked would swallow it as a paragraph and no
+                // diagram would render. Auto-close it so a partial diagram
+                // still renders (it re-renders as more chunks arrive).
+                const normalized = MF ? MF.closeUnclosedMermaidFence(content) : content;
+                let rendered = window.marked.parse(normalized);
                 rendered = this.wrapWordsInSpans(rendered);
                 // Convert mermaid code blocks — store code as base64 data attribute to avoid HTML parsing issues
-                rendered = rendered.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
-                    const decoded = code
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&#39;/g, "'")
-                        .replace(/&quot;/g, '"');
-                    const encoded = btoa(unescape(encodeURIComponent(decoded)));
-                    return `<div class="mermaid" data-code="${encoded}"></div>`;
-                });
+                rendered = MF ? MF.mermaidBlocksToDivs(rendered) : rendered;
                 // Deterministic two-column layout: ANY answer with a code
                 // block + meaningful prose renders side-by-side (explanation
                 // left, code right) — not dependent on the model emitting
@@ -1037,7 +1034,13 @@ export class AssistantView extends LitElement {
 
             const md = t => (window.marked ? window.marked.parse(t) : t);
             const leftHtml = md(leftMatch[1].trim());
-            const rightHtml = md(rightMatch[1].trim());
+            let rightHtml = md(rightMatch[1].trim());
+            // Diagrams on the right side must go through the same mermaid
+            // placeholder conversion as the normal path, otherwise the
+            // debounced renderer never picks them up and the user sees raw
+            // mermaid source instead of a diagram.
+            const MF = typeof window !== 'undefined' ? window.MermaidFormat : null;
+            if (MF) rightHtml = MF.mermaidBlocksToDivs(rightHtml);
 
             // Anything before/after the component (rare) renders as normal markdown.
             const before = content.slice(0, m.index).trim();
@@ -1567,45 +1570,27 @@ export class AssistantView extends LitElement {
             if (typeof window !== 'undefined' && window.mermaid && container.querySelector('.mermaid')) {
                 if (this._mermaidTimer) clearTimeout(this._mermaidTimer);
                 this._mermaidTimer = setTimeout(async () => {
+                    const MF = window.MermaidFormat || null;
                     const diagrams = container.querySelectorAll('.mermaid');
                     if (!diagrams.length) return;
                     for (let i = 0; i < diagrams.length; i++) {
                         const el = diagrams[i];
+                        // Skip diagrams already rendered by a previous pass —
+                        // without this every streaming chunk re-renders every
+                        // diagram on screen.
+                        if (el.getAttribute('data-rendered') === '1') continue;
                         const encoded = el.getAttribute('data-code');
                         if (!encoded) continue;
-                        const raw = decodeURIComponent(escape(atob(encoded)));
-                        const code = raw
-                            .replace(/```\s*"?\s*$/, '')
-                            .trim()
-                            .split('\n')
-                            .map(line => {
-                                // Strip &amp; artifacts from subgraph names (subgraph Data & Async → subgraph Data and Async)
-                                line = line.replace(/^(\s*subgraph\s+)(.*)$/g, (_, prefix, name) => {
-                                    const clean = name.replace(/&/g, 'and').replace(/[^a-zA-Z0-9 _-]/g, '');
-                                    return prefix + clean.trim();
-                                });
-                                // Convert dotted arrows -.-> or -. text .-> to solid arrows -->
-                                line = line.replace(/\s*-\..*?\.?->\s*/g, ' --> ');
-                                // Convert thick arrows ==> to solid arrows -->
-                                line = line.replace(/\s*==+>\s*/g, ' --> ');
-                                // Quote unquoted bracket labels containing special chars: / ( ) : & ;
-                                line = line.replace(/\[([^\]"]*[\/\(\):&;][^\]"]*)\]/g, (_, l) => `["${l}"]`);
-                                // Fix already-quoted labels with nested quotes
-                                line = line.replace(/\["(.+)"\]/g, (_, l) => `["${l.replace(/"/g, '')}"]`);
-                                // Fix parenthesized labels (round shapes)
-                                line = line.replace(/\("(.+)"\)/g, (_, l) => `("${l.replace(/"/g, '')}")`);
-                                // Quote participant lines with special chars
-                                line = line.replace(/^(\s*participant\s+)([^"\n]*[\/\(\)\.][^"\n]*)$/g, (_, p, name) => `${p}"${name.trim()}"`);
-                                return line;
-                            })
-                            .join('\n');
+                        const code = MF ? MF.sanitizeMermaidCode(encoded) : decodeURIComponent(escape(atob(encoded)));
                         try {
                             const id = 'mermaid-svg-' + i + '-' + Date.now();
                             const { svg } = await window.mermaid.render(id, code);
                             el.innerHTML = svg;
+                            el.setAttribute('data-rendered', '1');
                         } catch (e) {
                             console.warn('Mermaid render error:', e);
                             el.innerHTML = `<div style="color:#EF4444;font-size:11px;padding:8px;">Diagram error: ${e.message}</div><pre style="color:#999;font-size:10px;overflow-x:auto;">${code}</pre>`;
+                            el.setAttribute('data-rendered', '1');
                         }
                     }
                 }, 400);

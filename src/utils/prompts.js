@@ -420,6 +420,11 @@ Then provide your assumed answers and proceed with the full design below.
 
 ---
 
+DIAGRAM PRIORITY (critical — the live UI renders your diagram from this text):
+- The architecture diagram is the single most important part of your answer. NEVER emit it incomplete and NEVER leave the \`\`\`mermaid fence unclosed — an unclosed fence means no diagram renders at all.
+- Keep the diagram COMPACT: at most ~14 nodes across 3-4 subgraphs. A clean, small diagram the candidate can narrate beats a sprawling one.
+- If the answer is getting long, finish the diagram completely first, then compress the later sections — never the other way around.
+
 MANDATORY DESIGN OUTPUT STRUCTURE (Deliver all sections in order after clarification):
 
 1. 🎯 SPOKEN OPENING HOOK & SCALE MATH
@@ -453,6 +458,8 @@ flowchart LR
 
 *STRICT Mermaid Syntax Rules (MUST FOLLOW)*:
 - Use \`flowchart LR\` or \`flowchart TD\`.
+- Keep it COMPACT: at most ~14 nodes, 3-4 subgraphs. Fewer, well-chosen components beat exhaustive detail.
+- ALWAYS close the \`\`\`mermaid fence. An unclosed fence renders nothing.
 - Use simple alphanumeric node IDs: \`Client\`, \`LB\`, \`Gateway\`, \`ReadSvc\`, \`Cache\`, \`MasterDB\`, \`Kafka\`, \`Worker\`.
 - ALWAYS wrap label text in double quotes inside brackets: \`Client["Client Devices"]\`, \`Cache[("Redis Cache")]\`.
 - NEVER use \`&\` or special characters in subgraph names. Use plain words only: \`subgraph Storage\` not \`subgraph Data & Async\`.
